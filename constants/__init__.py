@@ -18,6 +18,8 @@ PSM_INTERRUPT = 0x13
 # Seconds
 CONNECT_TIMEOUT = 10.0
 SEND_TIMEOUT = 1.0
+# Kernel clamps this to its minimum (4608 bytes, about 4 reports), so stale motion cannot pile up.
+INTERRUPT_SNDBUF = 1
 # About 125 Hz, a typical Bluetooth mouse report rate
 MOUSE_FLUSH_INTERVAL = 0.008
 IDLE_POLL_INTERVAL = 0.1

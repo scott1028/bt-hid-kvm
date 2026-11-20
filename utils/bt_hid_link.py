@@ -13,6 +13,7 @@ from gi.repository import GLib
 from bt_hid_kvm.constants import (
     ADAPTER_PATH,
     CONNECT_TIMEOUT,
+    INTERRUPT_SNDBUF,
     PROFILE_PATH,
     PROFILE_UUID,
     PSM_CONTROL,
@@ -102,6 +103,7 @@ class HidLink:
             raise
         control.settimeout(None)
         interrupt.settimeout(SEND_TIMEOUT)
+        interrupt.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, INTERRUPT_SNDBUF)
         sockets = (control, interrupt)
         reports: queue.Queue[bytes | None] = queue.Queue(maxsize=256)
         with self._lock:
@@ -110,6 +112,11 @@ class HidLink:
             self.is_connected = True
         for target in (self._read_control, self._read_interrupt, self._send_reports):
             threading.Thread(target=target, args=(sockets, reports), daemon=True).start()
+
+    @property
+    def has_queued_reports(self) -> bool:
+        """True while the link is busy; callers merge mouse motion instead of queueing it."""
+        return not self._reports.empty()
 
     def send(self, report: bytes) -> None:
         if not self.is_connected:

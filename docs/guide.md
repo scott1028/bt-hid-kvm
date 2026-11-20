@@ -162,6 +162,7 @@ Time
 | `PSM_CONTROL` / `PSM_INTERRUPT` | `0x11` / `0x13` | HID 的 control 和 interrupt 通道 |
 | `CONNECT_TIMEOUT` | `10.0` 秒 | 每條 L2CAP 連線的逾時 |
 | `SEND_TIMEOUT` | `1.0` 秒 | 送出報告的逾時，超過就判定斷線 |
+| `INTERRUPT_SNDBUF` | `1` | interrupt 通道的 `SO_SNDBUF`。kernel 會調到最小值（實測 4608 bytes，約 4 筆報告），舊的滑鼠位移就不會在 kernel 裡排隊 |
 | `MOUSE_FLUSH_INTERVAL` | `0.008` 秒 | 滑鼠報告的最短間隔，約 125 Hz |
 | `IDLE_POLL_INTERVAL` | `0.1` 秒 | 沒有滑鼠移動待送時，輸入迴圈的檢查間隔 |
 | `UI_POLL_INTERVAL_MS` | `50` | GUI 讀取事件佇列的間隔（毫秒） |
@@ -198,7 +199,7 @@ control 通道收到 host 的請求時這樣回：`SET_*` 回 HANDSHAKE success�
 - **為什麼鍵盤一直被獨占**：如果按下 Meta 之後才獨占，KWin 收不到 Meta 放開，Meta 就會卡住。App 啟動時，也會先等所有按鍵放開才開始獨占
 - **keycode 怎麼轉成 HID usage**：用 Linux kernel `drivers/hid/hid-input.c` 的 `hid_keyboard[]` 反查（usage `0x00`–`0x81`）。修飾鍵另外轉成 modifier bit
 
-滑鼠移動會先累加，最多每 `MOUSE_FLUSH_INTERVAL` 送一筆；按鍵有變化就立刻送。`REL_WHEEL_HI_RES`、`REL_HWHEEL_HI_RES` 會被忽略，因為一般的 wheel 事件已經帶了同樣的捲動量。
+滑鼠移動會先累加，最多每 `MOUSE_FLUSH_INTERVAL` 送一筆；按鍵有變化就立刻送。藍牙忙的時候（App 佇列裡還有報告沒送完），位移會繼續累加，等鏈路空出來再合成一筆送出。相對位移可以直接相加，所以不會漏掉移動，也不會在停手後才慢慢補送。`REL_WHEEL_HI_RES`、`REL_HWHEEL_HI_RES` 會被忽略，因為一般的 wheel 事件已經帶了同樣的捲動量。
 
 輸入 thread 不做任何會卡住的藍牙 I/O，報告交給 sender thread 送（佇列上限 256 筆）。佇列滿了就直接斷線，不會默默丟掉「放開按鍵」的報告。
 
@@ -217,6 +218,18 @@ control 通道收到 host 的請求時這樣回：`SET_*` 回 HANDSHAKE success�
 ### 連線出現 Connection refused
 
 288V 還沒把 265K 當成 HID 裝置，請照[第一次配對](#第一次配對)重做一次。剛配對完的第一次連線也可能被拒，因為 288V 還在讀 SDP 記錄，`--selftest` 會自動重試。
+
+### 已連線但 288V 沒有反應
+
+GUI 顯示已連線，色塊也會變綠，但 288V 收不到任何輸入。請在 288V 執行 `journalctl -u bluetooth -n 20 --no-pager`，看有沒有這行：
+
+```text
+hidp_add_connection() Rejected connection from !bonded device /org/bluez/hci0/dev_E8_BF_B8_5A_FB_AD
+```
+
+有的話，代表 288V 已經不把 265K 當成已配對裝置，`ClassicBondedOnly=true` 會拒絕這種 HID 連線。L2CAP 通道還是連著，所以 App 不會報錯。照[第一次配對](#第一次配對)重新配對就會恢復。
+
+實測發生過一次，是在 288V 睡眠喚醒之後，確切原因還沒確認。
 
 ### 本機鍵盤沒反應
 

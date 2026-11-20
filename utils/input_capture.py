@@ -123,8 +123,9 @@ class InputCapture:
                 self._leave_remote()
             if self.is_remote and not self._is_mouse_grabbed:
                 self._grab_mice_when_released()
+            # While the link is busy, motion keeps adding up and goes out as one report later.
             is_flush_due = time.monotonic() - self._last_mouse_flush >= MOUSE_FLUSH_INTERVAL
-            if self.is_remote and self._mouse.has_motion and is_flush_due:
+            if self.is_remote and self._mouse.has_motion and is_flush_due and not self._link.has_queued_reports:
                 self._flush_mouse()
 
     def _handle_keyboard_event(self, event: evdev.InputEvent) -> None:
