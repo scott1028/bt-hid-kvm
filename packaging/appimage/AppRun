@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run the bundled Python; only glibc comes from the host.
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GI_TYPELIB_PATH="$HERE/usr/lib/girepository-1.0"
+export TCL_LIBRARY="$HERE/usr/share/tcltk/tcl8.6"
+export TK_LIBRARY="$HERE/usr/share/tcltk/tk8.6"
+# -I: ignore host PYTHON* env vars and user site-packages
+exec "$HERE/usr/bin/python3" -I -m bt_hid_kvm "$@"

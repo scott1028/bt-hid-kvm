@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=BT HID KVM
+Comment=Control another computer as a Bluetooth keyboard and mouse
+Exec=bt_hid_kvm
+Icon=bt_hid_kvm
+Categories=Utility;
+Terminal=false
