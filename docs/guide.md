@@ -1,0 +1,266 @@
+# BT HID KVM 使用指南
+
+這份指南依照你實際會走的順序寫：先設定，再日常使用，最後是參考資料。最短的上手路徑在 [README](../README.md)。
+
+## 名詞解釋
+
+| 名詞 | 白話解釋 |
+|---|---|
+| HID | Human Interface Device，鍵盤滑鼠這類輸入裝置用的協定。288V 收到 HID 報告，就當成有人在按鍵、動滑鼠 |
+| host | 接收 HID 輸入的電腦，這裡是 288V |
+| BlueZ | Linux 的藍牙協定堆疊，背景服務是 `bluetoothd` |
+| SDP 記錄 | 藍牙裝置對外公布「我提供哪些服務」的名片。288V 配對時會讀它，才知道 265K 是鍵盤滑鼠 |
+| L2CAP PSM | 藍牙連線用的通道編號，類似 TCP 的 port。HID 用 PSM 17（control）和 PSM 19（interrupt） |
+| evdev | Linux kernel 的輸入事件介面，也就是 `/dev/input/event*` |
+| 獨占（grab） | `EVIOCGRAB`：只讓 App 收到某個裝置的事件，桌面收不到 |
+| uinput | 讓程式建立虛擬輸入裝置的 kernel 介面，也就是 `/dev/uinput` |
+
+## 權限設定
+
+App 不需要 root，但要能讀 `/dev/input/event*`、寫 `/dev/uinput`。先檢查兩件事：
+
+```bash
+id -nG | grep -w input   # 有印出 input 才算在群組裡
+ls -l /dev/uinput        # 群組要是 input，權限要是 crw-rw----
+```
+
+不在 `input` 群組的話，執行 `sudo usermod -aG input "$USER"`，然後重新登入。
+
+`/dev/uinput` 的群組不是 `input` 的話，加一條 udev 規則，重開機後生效：
+
+```bash
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/80-uinput.rules
+```
+
+實測機器上的這條規則，來自 `ydotool` 套件的 `/usr/lib/udev/rules.d/80-uinput.rules`，不是系統內建。
+
+## 第一次配對
+
+288V 只在配對時讀 265K 的 SDP 記錄。如果配對時 App 沒在跑，288V 記到的 265K 只是一台電腦，不會建立鍵盤滑鼠。所以要先讓 App 註冊好 SDP 記錄，再重新配對。
+
+```text
+Time ─────────────────────────────────────────────────────────────────►
+
+265K | 移除舊配對 | 啟動 --selftest（註冊 SDP） | 發起配對 | 連線並畫正方形
+-----|------------|-----------------------------|----------|---------------
+288V | 移除舊配對 | 開啟可被搜尋                | 確認配對 | 游標畫出正方形
+```
+
+兩台的動作要照時間順序做。`--selftest` 會一直等到配對完成，才去連線。
+
+**1. 在 288V 上**，進 `bluetoothctl` 執行下面幾行。`<265K 的 MAC>` 可以在 265K 上用 `bluetoothctl show` 查，就是 `Controller` 後面那串：
+
+```text
+remove <265K 的 MAC>
+pairable on
+discoverable on
+agent KeyboardDisplay
+default-agent
+```
+
+這個 `bluetoothctl` 視窗要保持開著，等一下要在這裡輸入 `yes` 確認配對碼。`discoverable on` 預設 180 秒後會自動關掉。
+
+**2. 在 265K 上**，在 repo 根目錄執行：
+
+```bash
+bluetoothctl remove 98:BD:80:A5:22:41
+PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest --mac 98:BD:80:A5:22:41 &
+bluetoothctl
+```
+
+最後一行會進入 `bluetoothctl`，再依序輸入：
+
+```text
+agent KeyboardDisplay
+default-agent
+scan on
+pair 98:BD:80:A5:22:41
+trust 98:BD:80:A5:22:41
+```
+
+- 輸入 `pair` 之前，要先等 `scan on` 列出 288V
+- 配對時兩邊都會問 `Confirm passkey ... (yes/no)`。確認兩邊數字一樣，再各輸入 `yes`
+- 配對完成後，背景的 `--selftest` 會自動連線，讓 288V 的游標畫出正方形
+
+**3. 確認結果**：在 288V 執行 `bluetoothctl info <265K 的 MAC>`，清單裡要有這一行：
+
+```text
+UUID: Human Interface Device... (00001124-0000-1000-8000-00805f9b34fb)
+```
+
+最後在 288V 的 `bluetoothctl` 執行 `discoverable off`。之後兩台都不用再配對。
+
+## 視窗畫面
+
+在 repo 根目錄執行 `PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm` 後，會出現標題為「BT HID KVM」的視窗：
+
+```text
+BT HID KVM
+├─ 目標 MAC [98:BD:80:A5:22:41]  [連線] 或 [中斷]
+├─ 狀態：未連線 / 連線中… / 已連線 <MAC> / 連線失敗
+├─ 模式色塊：灰色「本機」或綠色「288V」
+├─ 提示：連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V
+├─ 鍵盤：被攔截的鍵盤
+├─ 滑鼠：被監看的滑鼠
+└─ log 區
+```
+
+連線會在背景 thread 進行，連線中按鈕會先停用。關閉視窗後，所有鍵盤滑鼠都會還給系統。
+
+## 切換模式時發生什麼事
+
+App 有兩種模式。觸發鍵決定現在是哪一種，每次切換都會先把「按住的鍵」處理乾淨，避免卡鍵。
+
+```text
+Time
+ │
+ ▼
+[本機模式]
+ ├─ 鍵盤：一直被 App 獨占，再經 uinput 轉送回本機
+ └─ 滑鼠：不獨占，桌面照常收到
+ │
+ ▼
+[按下觸發鍵] 進入 288V 模式
+ ├─ 本機目前按住的鍵，先送出放開
+ ├─ 滑鼠：等所有滑鼠按鍵都放開才獨占，避免拖曳中卡住
+ └─ 鍵盤滑鼠事件改成 HID 報告送到 288V
+ │
+ ▼
+[放開觸發鍵] 回到本機模式
+ ├─ 送「全部放開」的鍵盤和滑鼠報告給 288V
+ └─ 解除滑鼠獨占
+```
+
+幾種特殊情況：
+
+- 沒連線時，觸發鍵就是一般的 Win 鍵，照常傳到本機
+- 連線中 288V 斷線，App 會自動回到本機模式，log 出現 `link lost, back to local`
+- 288V 不會收到觸發鍵本身。`Ctrl+C` 這類組合鍵照常送出
+
+## 指令參數
+
+| 參數 | 預設值 | 說明 |
+|---|---|---|
+| （不加參數） | | 開啟 GUI |
+| `--mac MAC` | `98:BD:80:A5:22:41` | 要控制的 host 的藍牙位址 |
+| `--selftest` | | 不開 GUI。註冊 SDP 記錄 → 等 `--mac` 配對完成 → 連線 → 畫正方形、按一下 Shift → 結束 |
+
+`--selftest` 連線失敗時，每 3 秒重試一次，最多 10 次。
+
+## 設定值
+
+設定值都在 `constants/__init__.py`，要改就直接改這個檔案。
+
+| 常數 | 值 | 用途 |
+|---|---|---|
+| `TARGET_MAC` | `98:BD:80:A5:22:41` | GUI 和 `--mac` 的預設目標 |
+| `TRIGGER_KEY` | `ecodes.KEY_LEFTMETA` | 觸發鍵 |
+| `UINPUT_KEYBOARD_NAME` | `bt_hid_kvm keyboard` | 轉送回本機用的虛擬鍵盤名稱 |
+| `PROFILE_UUID` | `9d2b6c0e-6a8f-4f1e-9b7a-3c5d2e1f0a11` | 向 BlueZ 註冊 profile 用的自訂 UUID |
+| `PROFILE_PATH` | `/org/bluez/bt_hid_kvm` | D-Bus 上 Profile1 物件的路徑 |
+| `ADAPTER_PATH` | `/org/bluez/hci0` | `--selftest` 檢查配對狀態用的藍牙介面 |
+| `PSM_CONTROL` / `PSM_INTERRUPT` | `0x11` / `0x13` | HID 的 control 和 interrupt 通道 |
+| `CONNECT_TIMEOUT` | `10.0` 秒 | 每條 L2CAP 連線的逾時 |
+| `SEND_TIMEOUT` | `1.0` 秒 | 送出報告的逾時，超過就判定斷線 |
+| `MOUSE_FLUSH_INTERVAL` | `0.008` 秒 | 滑鼠報告的最短間隔，約 125 Hz |
+| `IDLE_POLL_INTERVAL` | `0.1` 秒 | 沒有滑鼠移動待送時，輸入迴圈的檢查間隔 |
+| `UI_POLL_INTERVAL_MS` | `50` | GUI 讀取事件佇列的間隔（毫秒） |
+| `MODE_COLOR_LOCAL` / `MODE_COLOR_REMOTE` | `#757575` / `#2e7d32` | 模式色塊的灰色和綠色 |
+
+## 運作方式
+
+### HID 連線
+
+App 先向 265K 的 BlueZ 註冊 SDP 記錄，288V 配對時讀到它，之後由 265K 主動連線。
+
+```text
+App  ──註冊記錄──► BlueZ（265K）
+288V ──配對讀取──► 知道 265K 是鍵盤滑鼠
+App  ──連線傳送──► 288V ──收到報告──► 游標移動、打字
+```
+
+- 連線走 L2CAP PSM 17（control）和 PSM 19（interrupt）
+- 由 265K 主動連線，SDP 記錄設定 `HIDReconnectInitiate=true`、`HIDNormallyConnectable=false`。client 端 socket 不需要 root
+- BlueZ 5.85 不讓外部程式用 HID UUID `0x1124` 註冊 profile（`UUID already registered`），所以改用 `PROFILE_UUID` 註冊；SDP 記錄的內容仍然宣告 `0x1124`
+
+兩種報告的格式：
+
+| 報告 | Report ID | 內容 |
+|---|---|---|
+| 鍵盤 | 1 | 8 bit modifier、1 byte 保留、6 個按鍵。另有 LED output report，App 讀到後直接丟掉 |
+| 滑鼠 | 2 | 5 個按鍵、X/Y 各 int16、wheel int8、AC Pan int8 |
+
+control 通道收到 host 的請求時這樣回：`SET_*` 回 HANDSHAKE success，`GET_PROTOCOL` 回 report protocol，其他 `GET_*` 回 unsupported。收到 `VIRTUAL_CABLE_UNPLUG` 就斷線。
+
+### 按鍵攔截
+
+- **裝置怎麼分類**：有 `KEY_A`、`KEY_Z` 的是鍵盤；有 `REL_X`、`REL_Y`、`BTN_LEFT` 的是滑鼠；`phys` 是空的虛擬裝置會略過，例如 ydotoold 和 App 自己的 `bt_hid_kvm keyboard`
+- **為什麼鍵盤一直被獨占**：如果按下 Meta 之後才獨占，KWin 收不到 Meta 放開，Meta 就會卡住。App 啟動時，也會先等所有按鍵放開才開始獨占
+- **keycode 怎麼轉成 HID usage**：用 Linux kernel `drivers/hid/hid-input.c` 的 `hid_keyboard[]` 反查（usage `0x00`–`0x81`）。修飾鍵另外轉成 modifier bit
+
+滑鼠移動會先累加，最多每 `MOUSE_FLUSH_INTERVAL` 送一筆；按鍵有變化就立刻送。`REL_WHEEL_HI_RES`、`REL_HWHEEL_HI_RES` 會被忽略，因為一般的 wheel 事件已經帶了同樣的捲動量。
+
+輸入 thread 不做任何會卡住的藍牙 I/O，報告交給 sender thread 送（佇列上限 256 筆）。佇列滿了就直接斷線，不會默默丟掉「放開按鍵」的報告。
+
+## 疑難排解
+
+### 啟動時找不到模組或沒有 AF_BLUETOOTH
+
+看到 `ModuleNotFoundError: No module named 'evdev'`，或沒有 `AF_BLUETOOTH` 的錯誤，代表你用的不是系統 Python。實測 asdf 的 Python 3.12 就沒有 `socket.AF_BLUETOOTH`。請改用 `/usr/bin/python3`。
+
+### 按觸發鍵沒反應
+
+- 先確認狀態是「已連線」。沒連線時，觸發鍵只是一般的 Win 鍵
+- 執行 `/usr/bin/python3 -m evdev.evtest`，選你的鍵盤，按一下那顆鍵，看它送出的是不是 `KEY_LEFTMETA`
+- 送出的是 `KEY_LEFTALT` 的話，代表鍵盤在 Mac 模式，改按左下角第 3 顆，或把鍵盤切到 Windows 模式
+
+### 連線出現 Connection refused
+
+288V 還沒把 265K 當成 HID 裝置，請照[第一次配對](#第一次配對)重做一次。剛配對完的第一次連線也可能被拒，因為 288V 還在讀 SDP 記錄，`--selftest` 會自動重試。
+
+### 本機鍵盤沒反應
+
+用滑鼠關掉 App 視窗；本機模式下滑鼠不會被獨占。也可以從別的終端機執行 `pkill -f "python3 -m bt_hid_kvm"`。程式一結束，kernel 就會把鍵盤滑鼠還給系統。
+
+## 已知限制
+
+使用上：
+
+- 連線期間，觸發鍵不能在本機當 Win 快速鍵用
+- 不會自動重連：288V 重開機或藍牙斷線後，要再按一次「連線」
+- 鍵盤一次最多送出 6 個非修飾鍵
+
+環境：
+
+- 不支援熱插拔：App 開著時才插上的鍵盤滑鼠，要重開 App 才會被攔截
+- 實體鍵盤的 Caps Lock 燈可能不會亮，因為燈號狀態會送到虛擬鍵盤（未實測）
+- host 目前只實測過 Linux + BlueZ；`--selftest` 的配對檢查只看 `hci0`
+
+## 開發與測試
+
+```text
+bt_hid_kvm/                        repo 根目錄
+├── .gitignore                     忽略 __pycache__ 與測試、lint 快取
+├── README.md                      最短上手路徑
+├── docs/guide.md                  這份指南
+├── __main__.py                    入口：GUI 或 --selftest
+├── components/main_window.py      Tk 視窗
+├── constants/__init__.py          MAC、觸發鍵、逾時等設定
+├── constants/hid.py               report descriptor、SDP 記錄、keycode 對照表
+├── constants/__tests__/           keycode 對照表的測試
+├── utils/bt_hid_link.py           RegisterProfile 與 L2CAP 連線
+├── utils/hid_report.py            HID 報告編碼、滑鼠位移合併
+├── utils/input_capture.py         evdev 獨占、uinput 轉送、模式切換
+└── utils/__tests__/               HID 報告與 control 回覆的測試
+```
+
+在 repo 根目錄執行檢查：
+
+```bash
+PYTHONPATH=.. /usr/bin/python3 -m pytest
+ruff check --config "lint.isort.known-first-party = ['bt_hid_kvm']" .
+```
+
+從 repo 根目錄跑時，ruff 認不出 `bt_hid_kvm` 是專案自己的套件，import 排序檢查會誤報。`--config` 就是用來告訴它這件事。
+
+測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們只測純函式，不需要藍牙或實體裝置。
