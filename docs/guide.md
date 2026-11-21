@@ -38,6 +38,8 @@ echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput
 
 ## 第一次配對
 
+一定要透過這個程式配對（GUI 的「配對」，或下面的 `--selftest` 指令流程），才能正常使用。用系統的藍牙設定配對時，App 通常沒在跑，配對就不會帶到鍵盤滑鼠的資訊。
+
 288V 只在配對時讀 265K 的 SDP 記錄。如果配對時 App 沒在跑，288V 記到的 265K 只是一台電腦，不會建立鍵盤滑鼠。所以要先讓 App 註冊好 SDP 記錄，再重新配對。
 
 App 一啟動就會註冊 SDP 記錄，所以直接在 App 裡按「配對」最省事。它不用掃描：掃描像在人群裡喊「誰在？」，要等 288V 舉手（開啟可被搜尋）；「配對」則像直接撥 288V 的電話號碼，只要 288V 的藍牙開著就接得到。
@@ -344,9 +346,11 @@ hidp_add_connection() Rejected connection from !bonded device /org/bluez/hci0/de
 
 ```text
 bt_hid_kvm/                        repo 根目錄
-├── .gitignore                     忽略 __pycache__ 與測試、lint 快取
+├── .gitignore                     忽略 __pycache__、測試與 lint 快取、build/、dist/
+├── Makefile                       `make` 打包 AppImage
 ├── README.md                      最短上手路徑
 ├── docs/guide.md                  這份指南
+├── packaging/appimage/            AppImage 的啟動腳本 AppRun、桌面檔、圖示
 ├── __main__.py                    入口：GUI 或 --selftest
 ├── components/main_window.py      Tk 視窗
 ├── constants/__init__.py          MAC、觸發鍵、逾時等設定
@@ -369,3 +373,23 @@ ruff check --config "lint.isort.known-first-party = ['bt_hid_kvm']" .
 從 repo 根目錄跑時，ruff 認不出 `bt_hid_kvm` 是專案自己的套件，import 排序檢查會誤報。`--config` 就是用來告訴它這件事。
 
 測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `python3-dbus` 和 `python3-gi`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput。
+
+## 打包成 AppImage
+
+AppImage 是單一執行檔：它把 Python、程式用到的套件和共用函式庫都包進去，換一台 Linux 不用再裝 `python3-evdev` 這些套件。在 repo 根目錄執行 `make` 就會打包：
+
+```text
+make ──下載並檢查 sha256──► build/tools/（appimagetool、runtime）
+     ──複製 Python 3.14、套件、共用函式庫──► build/AppDir/
+     ──打包──► dist/BT_HID_KVM-x86_64.AppImage
+```
+
+第一次執行會用 `curl` 下載 appimagetool 1.9.1 和 runtime 20251108，之後直接用 `build/tools/` 裡的檔案。`make clean` 會刪掉 `build/` 和 `dist/`。
+
+執行方式和參數跟原始碼版一樣，例如 `./dist/BT_HID_KVM-x86_64.AppImage --selftest`。
+
+幾個容易踩的坑：
+
+- 改了程式碼要重新執行 `make`，AppImage 才會更新
+- 打包用的是系統的 `/usr/bin/python3.14`，所以打包的機器要先裝好 README 裡的套件，另外還要 `sudo apt install python3-cairo`（`gi` 載入時會用到）
+- glibc 沒有包進去，執行的機器 glibc 版本要不低於打包的機器；權限設定和 BlueZ 也一樣要準備好

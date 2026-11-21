@@ -34,6 +34,9 @@ RUNTIME_SHA      := 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec
 # $(call download,url,sha256)
 download = mkdir -p $(@D) && curl -fsSLo $@.part $(1) && echo '$(2)  $@.part' | sha256sum -c --quiet - && mv $@.part $@
 
+# Plain `make` builds the AppImage.
+.DEFAULT_GOAL := appimage
+
 .PHONY: appimage clean
 
 appimage: $(APPIMAGETOOL) $(RUNTIME)

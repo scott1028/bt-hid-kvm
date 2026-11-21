@@ -34,7 +34,11 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm   # 在 repo 根目錄執行
 
 程式是以 `bt_hid_kvm` 套件執行的，所以 repo 資料夾名稱要是 `bt_hid_kvm`。`PYTHONPATH=..` 讓 Python 從上一層目錄找到這個套件。
 
+**一定要透過這個 App 配對，才能正常使用。** 用系統的藍牙設定配對的話，288V 只會把 265K 當成一般電腦，不會出現鍵盤滑鼠。
+
 第一次使用前，在 App 按「配對」，兩台核對配對碼後各按一次確認，288V 不用開啟可被搜尋。步驟見[第一次配對](docs/guide.md#第一次配對)。
+
+想要單一執行檔的話，在 repo 根目錄執行 `make`，會產生 `dist/BT_HID_KVM-x86_64.AppImage`，細節見[打包成 AppImage](docs/guide.md#打包成-appimage)。
 
 ## 先試試看
 
@@ -88,6 +92,7 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest
 - 運作方式：HID 連線與按鍵攔截
 - 疑難排解與已知限制
 - 開發與測試
+- 打包成 AppImage
 
 ## 授權
 
