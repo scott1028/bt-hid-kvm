@@ -14,6 +14,8 @@
 | evdev | Linux kernel 的輸入事件介面，也就是 `/dev/input/event*` |
 | 獨占（grab） | `EVIOCGRAB`：只讓 App 收到某個裝置的事件，桌面收不到 |
 | uinput | 讓程式建立虛擬輸入裝置的 kernel 介面，也就是 `/dev/uinput` |
+| agent | BlueZ 配對時負責問使用者的程式，例如跳出配對碼請你確認。App 有自己的 agent |
+| 可被搜尋 / 可連線 | 可被搜尋（discoverable）：別人掃描時看得到你。可連線（connectable）：別人知道你的 MAC 就能直接連。藍牙開著時通常一直可連線 |
 
 ## 權限設定
 
@@ -37,6 +39,56 @@ echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput
 ## 第一次配對
 
 288V 只在配對時讀 265K 的 SDP 記錄。如果配對時 App 沒在跑，288V 記到的 265K 只是一台電腦，不會建立鍵盤滑鼠。所以要先讓 App 註冊好 SDP 記錄，再重新配對。
+
+App 一啟動就會註冊 SDP 記錄，所以直接在 App 裡按「配對」最省事。它不用掃描：掃描像在人群裡喊「誰在？」，要等 288V 舉手（開啟可被搜尋）；「配對」則像直接撥 288V 的電話號碼，只要 288V 的藍牙開著就接得到。
+
+```text
+Time ──────────────────────────────────────────────────────────────►
+
+265K | 啟動 App   | 按「配對」 | 核對數字，按「相同」 | 按「連線」
+-----|------------|------------|----------------------|-----------------
+288V | 移除舊配對 | 回應連線   | 核對數字，按確認     | 讀 SDP，建立 HID
+```
+
+兩邊會顯示同一組 6 位數字，一樣才按確認。288V 不用執行 `discoverable on`。
+
+**1. 在 288V 上**，準備好接受配對：
+
+- 如果 288V 的藍牙清單裡還有 265K，先執行 `bluetoothctl remove <265K 的 MAC>`。`<265K 的 MAC>` 可以在 265K 上用 `bluetoothctl show` 查
+- 288V 要有 agent 負責跳出配對確認。KDE、GNOME 這類桌面通常內建；不確定的話，進 `bluetoothctl` 執行下面幾行，視窗保持開著：
+
+```text
+pairable on
+agent KeyboardDisplay
+default-agent
+```
+
+**2. 在 265K 上**，在 repo 根目錄啟動 App，確認「目標 MAC」是 288V 的位址，再按「配對」：
+
+```bash
+PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm
+```
+
+**3. 核對配對碼**：App 視窗會出現「配對碼 123456：288V 顯示的數字一樣嗎？」，288V 也會顯示一組數字。
+
+- 數字一樣：在 App 按「相同」，288V 那邊也按確認（在 `bluetoothctl` 裡就是輸入 `yes`）
+- 數字不一樣：按「不同」，這次配對就會取消
+
+完成後狀態會變成「已配對 98:BD:80:A5:22:41，可以連線」。
+
+**4. 連線**：按「連線」。第一次可能出現 `Connection refused`，因為 288V 還在讀 SDP 記錄，等幾秒再按一次。
+
+**5. 確認結果**：在 288V 執行 `bluetoothctl info <265K 的 MAC>`，清單裡要有 `UUID: Human Interface Device...` 這一行。之後兩台都不用再配對。
+
+三件事一定要記得：
+
+- 按「配對」會先移除 265K 這邊的舊配對，已經能用的話不要按
+- 已連線時「配對」會停用，要先按「中斷」
+- 看到 `pair failed: [Errno 112] Host is down`，見[按「配對」出現 Host is down](#按配對出現-host-is-down)
+
+### 用指令配對（不開 GUI）
+
+不開 GUI 時（例如只想用 `--selftest` 驗證），可以在終端機配對。這個方式靠 265K 掃描，所以 288V 要開啟可被搜尋。
 
 ```text
 Time ─────────────────────────────────────────────────────────────────►
@@ -96,8 +148,9 @@ UUID: Human Interface Device... (00001124-0000-1000-8000-00805f9b34fb)
 
 ```text
 BT HID KVM
-├─ 目標 MAC [98:BD:80:A5:22:41]  [連線] 或 [中斷]
-├─ 狀態：未連線 / 連線中… / 已連線 <MAC> / 連線失敗
+├─ 目標 MAC [98:BD:80:A5:22:41]  [配對]  [連線] 或 [中斷]
+├─ 狀態：未連線 / 配對中… / 已配對 <MAC>，可以連線 / 配對失敗 / 連線中… / 已連線 <MAC> / 連線失敗
+├─ 配對碼：只在核對配對碼時出現，旁邊有 [不同] [相同]
 ├─ 模式色塊：灰色「本機」或綠色「288V」
 ├─ 提示：連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V
 ├─ 鍵盤：被攔截的鍵盤
@@ -105,7 +158,7 @@ BT HID KVM
 └─ log 區
 ```
 
-連線會在背景 thread 進行，連線中按鈕會先停用。關閉視窗後，所有鍵盤滑鼠都會還給系統。
+配對和連線都在背景 thread 進行，進行中「配對」和「連線」都會先停用；已連線時「配對」也會停用。關閉視窗後，所有鍵盤滑鼠都會還給系統。
 
 ## 切換模式時發生什麼事
 
@@ -158,10 +211,13 @@ Time
 | `UINPUT_KEYBOARD_NAME` | `bt_hid_kvm keyboard` | 轉送回本機用的虛擬鍵盤名稱 |
 | `PROFILE_UUID` | `9d2b6c0e-6a8f-4f1e-9b7a-3c5d2e1f0a11` | 向 BlueZ 註冊 profile 用的自訂 UUID |
 | `PROFILE_PATH` | `/org/bluez/bt_hid_kvm` | D-Bus 上 Profile1 物件的路徑 |
-| `ADAPTER_PATH` | `/org/bluez/hci0` | `--selftest` 檢查配對狀態用的藍牙介面 |
+| `AGENT_PATH` | `/org/bluez/bt_hid_kvm/agent` | D-Bus 上 Agent1 物件的路徑，配對時 BlueZ 透過它問配對碼 |
+| `ADAPTER_PATH` | `/org/bluez/hci0` | `--selftest` 檢查配對狀態、GUI「配對」用的藍牙介面 |
+| `PSM_SDP` | `0x01` | 配對前直連 288V 用的通道，只是為了讓 BlueZ 建立裝置資料 |
 | `PSM_CONTROL` / `PSM_INTERRUPT` | `0x11` / `0x13` | HID 的 control 和 interrupt 通道 |
-| `CONNECT_TIMEOUT` | `10.0` 秒 | 每條 L2CAP 連線的逾時 |
+| `CONNECT_TIMEOUT` | `10.0` 秒 | 每條 L2CAP 連線的逾時；配對前的直連、等 BlueZ 建立裝置資料也用這個值 |
 | `SEND_TIMEOUT` | `1.0` 秒 | 送出報告的逾時，超過就判定斷線 |
+| `PAIR_TIMEOUT` | `120.0` 秒 | 等配對完成的上限，要留時間讓兩邊核對配對碼 |
 | `INTERRUPT_SNDBUF` | `1` | interrupt 通道的 `SO_SNDBUF`。kernel 會調到最小值（實測 4608 bytes，約 4 筆報告），舊的滑鼠位移就不會在 kernel 裡排隊 |
 | `MOUSE_FLUSH_INTERVAL` | `0.008` 秒 | 滑鼠報告的最短間隔，約 125 Hz |
 | `IDLE_POLL_INTERVAL` | `0.1` 秒 | 沒有滑鼠移動待送時，輸入迴圈的檢查間隔 |
@@ -193,6 +249,20 @@ App  ──連線傳送──► 288V ──收到報告──► 游標移動�
 
 control 通道收到 host 的請求時這樣回：`SET_*` 回 HANDSHAKE success，`GET_PROTOCOL` 回 report protocol，其他 `GET_*` 回 unsupported。收到 `VIRTUAL_CABLE_UNPLUG` 就斷線。
 
+### 配對
+
+「配對」不掃描，而是用 MAC 直接連到 288V，再請 BlueZ 用 App 自己的 agent 配對。
+
+```text
+App ──直連 PSM 1──► 288V
+App ──Pair()──────► BlueZ ──問配對碼──► App 的 agent ──顯示──► 配對碼列
+App ──設 Trusted──► BlueZ
+```
+
+- 第 1 行讓 BlueZ 建立 288V 的裝置資料，`Pair()` 才有對象。這條連線不要求加密，kernel 不會自己發起配對，它會一直開到配對結束
+- agent 用 `DisplayYesNo` 註冊，但不是 default agent：BlueZ 只把 App 自己發起的配對交給它，桌面的 agent 照常處理其他配對
+- 對已配對的裝置呼叫 `Pair()` 會失敗（`AlreadyExists`），所以 App 會先移除 265K 這邊的舊配對
+
 ### 按鍵攔截
 
 - **裝置怎麼分類**：有 `KEY_A`、`KEY_Z` 的是鍵盤；有 `REL_X`、`REL_Y`、`BTN_LEFT` 的是滑鼠；`phys` 是空的虛擬裝置會略過，例如 ydotoold 和 App 自己的 `bt_hid_kvm keyboard`
@@ -217,7 +287,15 @@ control 通道收到 host 的請求時這樣回：`SET_*` 回 HANDSHAKE success�
 
 ### 連線出現 Connection refused
 
-288V 還沒把 265K 當成 HID 裝置，請照[第一次配對](#第一次配對)重做一次。剛配對完的第一次連線也可能被拒，因為 288V 還在讀 SDP 記錄，`--selftest` 會自動重試。
+288V 還沒把 265K 當成 HID 裝置，請照[第一次配對](#第一次配對)重做一次。剛配對完的第一次連線也可能被拒，因為 288V 還在讀 SDP 記錄，`--selftest` 會自動重試；用 GUI 的話，等幾秒再按一次「連線」。
+
+### 按「配對」出現 Host is down
+
+log 出現 `pair failed: [Errno 112] Host is down`，代表 265K 用 MAC 連不到 288V，大約 5 秒後就放棄了。依序檢查：
+
+- 288V 有開機，藍牙也開著
+- 「目標 MAC」是 288V 的位址，可以在 288V 上用 `bluetoothctl show` 查
+- 兩台不要離太遠
 
 ### 已連線但 288V 沒有反應
 
@@ -247,7 +325,7 @@ hidp_add_connection() Rejected connection from !bonded device /org/bluez/hci0/de
 
 - 不支援熱插拔：App 開著時才插上的鍵盤滑鼠，要重開 App 才會被攔截
 - 實體鍵盤的 Caps Lock 燈可能不會亮，因為燈號狀態會送到虛擬鍵盤（未實測）
-- host 目前只實測過 Linux + BlueZ；`--selftest` 的配對檢查只看 `hci0`
+- host 目前只實測過 Linux + BlueZ；`--selftest` 的配對檢查和 GUI 的「配對」都只用 `hci0`
 
 ## 開發與測試
 
@@ -262,9 +340,10 @@ bt_hid_kvm/                        repo 根目錄
 ├── constants/hid.py               report descriptor、SDP 記錄、keycode 對照表
 ├── constants/__tests__/           keycode 對照表的測試
 ├── utils/bt_hid_link.py           RegisterProfile 與 L2CAP 連線
+├── utils/bt_pairing.py            配對：用 MAC 直連、Agent1 問配對碼
 ├── utils/hid_report.py            HID 報告編碼、滑鼠位移合併
 ├── utils/input_capture.py         evdev 獨占、uinput 轉送、模式切換
-└── utils/__tests__/               HID 報告與 control 回覆的測試
+└── utils/__tests__/               HID 報告、control 回覆、配對 agent 的測試
 ```
 
 在 repo 根目錄執行檢查：
@@ -276,4 +355,4 @@ ruff check --config "lint.isort.known-first-party = ['bt_hid_kvm']" .
 
 從 repo 根目錄跑時，ruff 認不出 `bt_hid_kvm` 是專案自己的套件，import 排序檢查會誤報。`--config` 就是用來告訴它這件事。
 
-測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們只測純函式，不需要藍牙或實體裝置。
+測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式，配對 agent 的測試會用到 `python3-dbus` 和 `python3-gi`，但不會連上系統的 BlueZ。

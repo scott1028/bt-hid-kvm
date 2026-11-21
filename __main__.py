@@ -48,9 +48,9 @@ def main() -> None:
     if args.selftest:
         run_selftest(args.mac)
         return
-    register_hid_profile()
+    bus = register_hid_profile()
     root = tk.Tk()
-    MainWindow(root, args.mac)
+    MainWindow(root, args.mac, bus)
     root.mainloop()
 
 

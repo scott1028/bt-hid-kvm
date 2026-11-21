@@ -34,7 +34,7 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm   # 在 repo 根目錄執行
 
 程式是以 `bt_hid_kvm` 套件執行的，所以 repo 資料夾名稱要是 `bt_hid_kvm`。`PYTHONPATH=..` 讓 Python 從上一層目錄找到這個套件。
 
-第一次使用前，兩台要在 App 執行時重新配對一次，步驟見[第一次配對](docs/guide.md#第一次配對)。
+第一次使用前，在 App 按「配對」，兩台核對配對碼後各按一次確認，288V 不用開啟可被搜尋。步驟見[第一次配對](docs/guide.md#第一次配對)。
 
 ## 先試試看
 

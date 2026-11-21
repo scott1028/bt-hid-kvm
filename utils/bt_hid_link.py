@@ -62,8 +62,12 @@ def register_hid_profile() -> dbus.SystemBus:
     return bus
 
 
+def get_device_path(mac: str) -> str:
+    return f"{ADAPTER_PATH}/dev_{mac.replace(':', '_')}"
+
+
 def get_is_paired(bus: dbus.SystemBus, mac: str) -> bool:
-    path = f"{ADAPTER_PATH}/dev_{mac.replace(':', '_')}"
+    path = get_device_path(mac)
     try:
         properties = dbus.Interface(bus.get_object("org.bluez", path), "org.freedesktop.DBus.Properties")
         return bool(properties.Get("org.bluez.Device1", "Paired"))

@@ -1,7 +1,10 @@
 import queue
 import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
+
+import dbus
 
 from bt_hid_kvm.constants import (
     MODE_COLOR_LOCAL,
@@ -9,14 +12,16 @@ from bt_hid_kvm.constants import (
     UI_POLL_INTERVAL_MS,
 )
 from bt_hid_kvm.utils.bt_hid_link import HidLink
+from bt_hid_kvm.utils.bt_pairing import pair_device, register_pairing_agent
 from bt_hid_kvm.utils.input_capture import InputCapture
 
 
 class MainWindow:
     """Tk window; worker threads talk to it only through a queue."""
 
-    def __init__(self, root: tk.Tk, mac: str):
+    def __init__(self, root: tk.Tk, mac: str, bus: dbus.SystemBus):
         self._root = root
+        self._bus = bus
         self._events: queue.Queue[tuple[str, object]] = queue.Queue()
         self._link = HidLink(on_disconnect=lambda reason: self._events.put(("disconnected", reason)))
         self._capture = InputCapture(
@@ -24,7 +29,14 @@ class MainWindow:
             on_mode_change=lambda is_remote: self._events.put(("mode", is_remote)),
             on_log=lambda message: self._events.put(("log", message)),
         )
+        register_pairing_agent(
+            bus,
+            on_request_confirmation=lambda passkey, answer: self._events.put(("passkey", (passkey, answer))),
+            on_cancel=lambda: self._events.put(("passkey_cancel", None)),
+        )
         self._is_connecting = False
+        self._is_pairing = False
+        self._answer_passkey: Callable[[bool], None] | None = None
 
         root.title("BT HID KVM")
         root.minsize(420, 0)
@@ -34,27 +46,42 @@ class MainWindow:
         ttk.Label(frame, text="目標 MAC").grid(row=0, column=0, sticky="w")
         self._mac = tk.StringVar(value=mac)
         ttk.Entry(frame, textvariable=self._mac, width=20).grid(row=0, column=1, sticky="we", padx=8)
-        self._connect_button = ttk.Button(frame, text="連線", command=self._handle_connect_click)
-        self._connect_button.grid(row=0, column=2)
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=0, column=2)
+        self._pair_button = ttk.Button(buttons, text="配對", command=self._handle_pair_click)
+        self._pair_button.pack(side="left", padx=(0, 4))
+        self._connect_button = ttk.Button(buttons, text="連線", command=self._handle_connect_click)
+        self._connect_button.pack(side="left")
 
         self._status = ttk.Label(frame, text="狀態：未連線")
         self._status.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
+        # Shown only while BlueZ waits for the user to compare passkeys.
+        self._passkey = ttk.Frame(frame)
+        self._passkey.grid(row=2, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        self._passkey_label = ttk.Label(self._passkey, font=("TkDefaultFont", 14, "bold"))
+        self._passkey_label.pack(side="left")
+        ttk.Button(self._passkey, text="相同", command=lambda: self._handle_passkey_answer(True)).pack(side="right")
+        ttk.Button(self._passkey, text="不同", command=lambda: self._handle_passkey_answer(False)).pack(
+            side="right", padx=4
+        )
+        self._passkey.grid_remove()
+
         self._mode = tk.Label(
             frame, text="本機", bg=MODE_COLOR_LOCAL, fg="white", font=("TkDefaultFont", 20, "bold"), pady=12
         )
-        self._mode.grid(row=2, column=0, columnspan=3, sticky="we", pady=8)
+        self._mode.grid(row=3, column=0, columnspan=3, sticky="we", pady=8)
         ttk.Label(frame, text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V").grid(
-            row=3, column=0, columnspan=3, sticky="w"
+            row=4, column=0, columnspan=3, sticky="w"
         )
 
         self._devices = ttk.Label(frame, text="", justify="left")
-        self._devices.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._devices.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         self._log = tk.Text(frame, height=8, width=60, state="disabled")
-        self._log.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        self._log.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(6, weight=1)
 
         self._capture.start()
         keyboards = ", ".join(device.name.strip() for device in self._capture.keyboards) or "（無）"
@@ -72,6 +99,7 @@ class MainWindow:
             return
         self._is_connecting = True
         self._connect_button.configure(state="disabled")
+        self._pair_button.configure(state="disabled")
         self._status.configure(text="狀態：連線中…")
         threading.Thread(target=self._connect, args=(self._mac.get().strip(),), daemon=True).start()
 
@@ -81,6 +109,28 @@ class MainWindow:
             self._events.put(("connected", mac))
         except OSError as error:
             self._events.put(("connect_failed", error))
+
+    def _handle_pair_click(self) -> None:
+        if self._is_pairing:
+            return
+        self._is_pairing = True
+        self._pair_button.configure(state="disabled")
+        self._connect_button.configure(state="disabled")
+        self._status.configure(text="狀態：配對中…")
+        threading.Thread(target=self._pair, args=(self._mac.get().strip(),), daemon=True).start()
+
+    def _pair(self, mac: str) -> None:
+        try:
+            pair_device(self._bus, mac)
+            self._events.put(("paired", mac))
+        except (OSError, dbus.DBusException) as error:
+            self._events.put(("pair_failed", error))
+
+    def _handle_passkey_answer(self, is_accepted: bool) -> None:
+        if self._answer_passkey is not None:
+            self._answer_passkey(is_accepted)
+        self._answer_passkey = None
+        self._passkey.grid_remove()
 
     def _poll_events(self) -> None:
         while not self._events.empty():
@@ -101,12 +151,33 @@ class MainWindow:
             elif kind == "connect_failed":
                 self._is_connecting = False
                 self._connect_button.configure(state="normal", text="連線")
+                self._pair_button.configure(state="normal")
                 self._status.configure(text="狀態：連線失敗")
                 self._append_log(f"connect failed: {payload}")
             elif kind == "disconnected":
                 self._connect_button.configure(text="連線")
+                self._pair_button.configure(state="normal")
                 self._status.configure(text="狀態：未連線")
                 self._append_log(f"disconnected: {payload}")
+            elif kind == "passkey":
+                passkey, self._answer_passkey = payload
+                self._passkey_label.configure(text=f"配對碼 {passkey:06d}：288V 顯示的數字一樣嗎？")
+                self._passkey.grid()
+            elif kind == "passkey_cancel":
+                self._answer_passkey = None
+                self._passkey.grid_remove()
+            elif kind == "paired":
+                self._is_pairing = False
+                self._pair_button.configure(state="normal")
+                self._connect_button.configure(state="normal")
+                self._status.configure(text=f"狀態：已配對 {payload}，可以連線")
+                self._append_log(f"paired with {payload}")
+            elif kind == "pair_failed":
+                self._is_pairing = False
+                self._pair_button.configure(state="normal")
+                self._connect_button.configure(state="normal")
+                self._status.configure(text="狀態：配對失敗")
+                self._append_log(f"pair failed: {payload}")
         self._root.after(UI_POLL_INTERVAL_MS, self._poll_events)
 
     def _append_log(self, message: str) -> None:
