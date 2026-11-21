@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from evdev import ecodes
 
 # Hold this key to send keyboard and mouse to the host.
@@ -43,3 +46,6 @@ UI_POLL_INTERVAL_MS = 50
 SCAN_REFRESH_MS = 1000
 MODE_COLOR_LOCAL = "#757575"
 MODE_COLOR_REMOTE = "#2e7d32"
+HINT_COLOR = "#757575"
+# Remembered UI choices; a broken file is deleted and the defaults come back.
+UI_STATE_PATH = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "bt-hid-kvm" / "ui_state.json"

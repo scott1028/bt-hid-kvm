@@ -8,13 +8,20 @@ from tkinter import ttk
 import dbus
 
 from bt_hid_kvm.constants import (
+    HINT_COLOR,
     MODE_COLOR_LOCAL,
     MODE_COLOR_REMOTE,
     SCAN_DURATION,
     SCAN_REFRESH_MS,
     UI_POLL_INTERVAL_MS,
+    UI_STATE_PATH,
 )
-from bt_hid_kvm.utils.bt_hid_link import HidLink, get_adapter_path, register_hid_profile
+from bt_hid_kvm.utils.bt_hid_link import (
+    HidLink,
+    get_adapter_path,
+    get_is_paired,
+    register_hid_profile,
+)
 from bt_hid_kvm.utils.bt_pairing import (
     get_known_hosts,
     get_mac_from_text,
@@ -24,6 +31,7 @@ from bt_hid_kvm.utils.bt_pairing import (
     stop_host_scan,
 )
 from bt_hid_kvm.utils.input_capture import InputCapture
+from bt_hid_kvm.utils.ui_state import UiState, load_ui_state, save_ui_state
 
 
 class MainWindow:
@@ -76,8 +84,14 @@ class MainWindow:
         self._connect_button = ttk.Button(buttons, text="連線", command=self._handle_connect_click)
         self._connect_button.pack(side="left")
 
-        self._status = ttk.Label(frame, text="狀態：未連線")
-        self._status.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        status_row = ttk.Frame(frame)
+        status_row.grid(row=1, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        self._status = ttk.Label(status_row, text="狀態：未連線")
+        self._status.pack(side="left")
+        # Says that 重新配對 drops the bond, so both sides compare passkeys again.
+        self._pair_hint = ttk.Label(status_row, foreground=HINT_COLOR, font="TkSmallCaptionFont")
+        self._pair_hint.pack(side="left", padx=(16, 0))
+        self._target.trace_add("write", lambda *_: self._update_pair_controls())
 
         # Shown only while BlueZ waits for the user to compare passkeys.
         self._passkey = ttk.Frame(frame)
@@ -97,7 +111,11 @@ class MainWindow:
         # Boxed section, so the switch does not blend into the text around it.
         trigger = ttk.LabelFrame(frame, text="觸發鍵", padding=(10, 6))
         trigger.grid(row=4, column=0, columnspan=3, sticky="we", pady=(4, 4))
-        self._is_toggle_mode = tk.BooleanVar(value=False)
+        # The theme's box is tiny; a bigger one makes the checked state easy to see.
+        ttk.Style(root).configure("TCheckbutton", indicatordiameter=18, indicatormargin=(0, 0, 8, 0))
+        self._is_toggle_mode = tk.BooleanVar(value=load_ui_state(UI_STATE_PATH).is_toggle_mode)
+        # Fires on clicks only, not on the initial value.
+        self._is_toggle_mode.trace_add("write", lambda *_: self._save_ui_state())
         ttk.Checkbutton(
             trigger,
             text="切換模式：按一下左 Win 切換，不用按住",
@@ -164,6 +182,7 @@ class MainWindow:
         self._connect_button.configure(state="disabled")
         self._scan_button.configure(state="disabled")
         self._status.configure(text="狀態：配對中…")
+        self._pair_hint.configure(text="")
         threading.Thread(target=self._pair, args=(mac,), daemon=True).start()
 
     def _pair(self, mac: str) -> None:
@@ -186,6 +205,12 @@ class MainWindow:
             self._hint.configure(text="連線後按一下左 Win（Keychron Mac 模式為 Command 位置）切到對方電腦，再按一下切回本機")
         else:
             self._hint.configure(text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制對方電腦")
+
+    def _save_ui_state(self) -> None:
+        try:
+            save_ui_state(UI_STATE_PATH, UiState(is_toggle_mode=self._is_toggle_mode.get()))
+        except OSError as error:
+            self._append_log(f"save UI state failed: {error}")
 
     def _handle_scan_click(self) -> None:
         try:
@@ -232,6 +257,14 @@ class MainWindow:
         # Hosts are sorted paired first; start on one that can connect right away.
         if not self._target.get() and hosts and hosts[0].is_paired:
             self._target.set(labels[0])
+        self._update_pair_controls()
+
+    def _update_pair_controls(self) -> None:
+        # Ask BlueZ each time: a failed Pair() has already dropped the old bond.
+        mac = get_mac_from_text(self._target.get())
+        is_paired = mac is not None and get_is_paired(self._bus, self._adapter_path, mac)
+        self._pair_button.configure(text="重新配對" if is_paired else "配對")
+        self._pair_hint.configure(text="已配對，不用再按「重新配對」；按了要重新核對配對碼" if is_paired else "")
 
     def _poll_events(self) -> None:
         while not self._events.empty():
@@ -289,6 +322,7 @@ class MainWindow:
                 self._scan_button.configure(state="normal")
                 self._status.configure(text="狀態：配對失敗")
                 self._append_log(f"pair failed: {payload}")
+                self._update_pair_controls()
         self._root.after(UI_POLL_INTERVAL_MS, self._poll_events)
 
     def _append_log(self, message: str) -> None:

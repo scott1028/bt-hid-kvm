@@ -121,8 +121,8 @@ uv run bt-hid-kvm
 
 三件事一定要記得：
 
-- 按「配對」會先移除本機這邊的舊配對，已經能用的話不要按。雙系統的 host 尤其不要，見[同一台 host 裝了 Linux 和 Windows](#同一台-host-裝了-linux-和-windows)
-- 已連線時「配對」會停用，要先按「中斷」
+- 目標是已配對的 host 時，按鈕會顯示「重新配對」，旁邊也會提示。按下去會先移除本機這邊的舊配對，兩台要重新核對配對碼，已經能用的話不要按。雙系統的 host 尤其不要，見[同一台 host 裝了 Linux 和 Windows](#同一台-host-裝了-linux-和-windows)
+- 已連線時「配對」/「重新配對」會停用，要先按「中斷」
 - 看到 `pair failed: [Errno 112] Host is down`，見[按「配對」出現 Host is down](#按配對出現-host-is-down)
 
 ### 用指令配對（不開 GUI，Linux host）
@@ -218,8 +218,9 @@ sudo systemctl start bluetooth
 
 ```text
 BT HID KVM
-├─ 目標 [<host 名稱> (<MAC>) 已配對 v]  [掃描]  [配對]  [連線] 或 [中斷]
+├─ 目標 [<host 名稱> (<MAC>) 已配對 v]  [掃描]  [配對] 或 [重新配對]  [連線] 或 [中斷]
 ├─ 狀態：未連線 / 配對中… / 已配對 <MAC>，可以連線 / 配對失敗 / 連線中… / 已連線 <MAC> / 連線失敗 / 掃描中…（對方電腦要開啟可被搜尋） / 掃描結束，清單裡有 N 台電腦 / 目標裡找不到 MAC
+│  └─ 目標是已配對的 host 時，右邊有灰字：已配對，不用再按「重新配對」；按了要重新核對配對碼
 ├─ 配對碼：只在核對配對碼時出現，旁邊有 [不同] [相同]
 ├─ 模式色塊：灰色「本機」，或綠色並顯示 host 的名稱
 ├─ 觸發鍵（外框）
@@ -232,7 +233,7 @@ BT HID KVM
 
 「目標」是下拉選單，也可以直接輸入 MAC。清單列出 BlueZ 已知、在 App 用的藍牙介面上的電腦，已配對的排前面，例如 `my-laptop (AA:BB:CC:DD:EE:FF) 已配對`。啟動時沒給 `--mac` 的話，會自動選第一台已配對的電腦。按「掃描」會只掃 Classic 藍牙 20 秒，每秒更新清單，這段時間對方要開啟可被搜尋。
 
-「切換模式」不會記住，每次開 App 都從按住模式開始。
+「切換模式」會記住，存在 `~/.cache/bt-hid-kvm/ui_state.json`（有設定 `XDG_CACHE_HOME` 的話就放在它底下）。檔案不見或格式壞掉時，App 會刪掉它，從按住模式開始。
 
 配對和連線都在背景 thread 進行，進行中「掃描」「配對」「連線」都會先停用；已連線時「掃描」和「配對」也會停用，host 自己連上時也一樣。掃描中按「配對」或「連線」，或 host 自己連上，都會先停止掃描。關閉視窗後，所有鍵盤滑鼠都會還給系統。
 
@@ -459,14 +460,16 @@ bt_hid_kvm/                        repo 根目錄，資料夾名稱不限
     ├── __init__.py                套件標記，內容是空的
     ├── __main__.py                入口：GUI 或 --selftest
     ├── components/main_window.py  Tk 視窗
-    ├── constants/__init__.py      觸發鍵、App 的 UUID、逾時等設定
+    ├── components/__tests__/      配對按鈕和提示的測試
+    ├── constants/__init__.py      觸發鍵、App 的 UUID、逾時、UI 狀態檔位置等設定
     ├── constants/hid.py           report descriptor、SDP 記錄、keycode 對照表
     ├── constants/__tests__/       keycode 對照表的測試
     ├── utils/bt_hid_link.py       RegisterProfile、L2CAP 連線（連出去和接進來）、找藍牙介面
     ├── utils/bt_pairing.py        配對：用 MAC 直連、Agent1 問配對碼、host 清單與掃描
     ├── utils/hid_report.py        HID 報告編碼、滑鼠位移合併
     ├── utils/input_capture.py     evdev 獨占、uinput 轉送、模式切換
-    └── utils/__tests__/           HID 報告、control 回覆、配對 agent、host 清單、切換模式、接受 host 連線、找藍牙介面的測試
+    ├── utils/ui_state.py          記住切換模式，檔案壞掉就刪掉
+    └── utils/__tests__/           HID 報告、control 回覆、配對 agent、host 清單、切換模式、接受 host 連線、找藍牙介面、UI 狀態檔的測試
 ```
 
 在 repo 根目錄執行檢查：
@@ -478,7 +481,7 @@ uv run ruff check .
 
 `pytest` 和 `ruff` 是 `pyproject.toml` 的開發依賴，`uv sync` 會一起裝好。pytest 只找 `src/` 底下的測試；ruff 看得出 `src/bt_hid_kvm` 是專案自己的套件，不用額外設定。
 
-測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `dbus-python` 和 `PyGObject`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput；接受 host 連線的測試用假的 L2CAP socket。
+測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `dbus-python` 和 `PyGObject`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput；接受 host 連線的測試用假的 L2CAP socket；配對按鈕的測試用假的 Tk 元件和 BlueZ 回應；UI 狀態檔的測試只寫 pytest 的暫存資料夾。
 
 ## 打包成 AppImage
 
