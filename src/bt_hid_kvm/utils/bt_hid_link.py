@@ -1,4 +1,3 @@
-import os
 import queue
 import socket
 import struct
@@ -11,8 +10,11 @@ import dbus.service
 from gi.repository import GLib
 
 from bt_hid_kvm.constants import (
-    ADAPTER_PATH,
     CONNECT_TIMEOUT,
+    CONTROL_PROFILE_PATH,
+    CONTROL_PROFILE_UUID,
+    INTERRUPT_PROFILE_PATH,
+    INTERRUPT_PROFILE_UUID,
     INTERRUPT_SNDBUF,
     PROFILE_PATH,
     PROFILE_UUID,
@@ -25,7 +27,11 @@ from bt_hid_kvm.utils.hid_report import get_control_reply
 
 
 class HidProfile(dbus.service.Object):
-    """BlueZ Profile1 object; it only exists to publish the HID SDP record."""
+    """BlueZ Profile1 object; bluetoothd hands it the sockets a host opens on the profile's PSM."""
+
+    def __init__(self, bus: dbus.SystemBus, path: str, on_connection: Callable[[socket.socket], None]):
+        super().__init__(bus, path)
+        self._on_connection = on_connection
 
     @dbus.service.method("org.bluez.Profile1", in_signature="", out_signature="")
     def Release(self):
@@ -33,41 +39,53 @@ class HidProfile(dbus.service.Object):
 
     @dbus.service.method("org.bluez.Profile1", in_signature="oha{sv}", out_signature="")
     def NewConnection(self, device, fd, properties):
-        # This device always connects out, so incoming sockets are dropped.
-        os.close(fd.take())
+        self._on_connection(socket.socket(fileno=fd.take()))
 
     @dbus.service.method("org.bluez.Profile1", in_signature="o", out_signature="")
     def RequestDisconnection(self, device):
         pass
 
 
-def register_hid_profile() -> dbus.SystemBus:
+def register_hid_profile(on_connection: Callable[[socket.socket], None]) -> dbus.SystemBus:
+    """Publish the HID SDP record and listen on PSM 17/19; on_connection runs on the GLib thread."""
     dbus.mainloop.glib.threads_init()
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-    HidProfile(bus, PROFILE_PATH)
     threading.Thread(target=GLib.MainLoop().run, daemon=True).start()
     manager = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.ProfileManager1")
-    manager.RegisterProfile(
-        PROFILE_PATH,
-        PROFILE_UUID,
-        {
-            "ServiceRecord": SDP_RECORD_XML,
-            "Role": "server",
-            "RequireAuthentication": True,
-            "RequireAuthorization": False,
-            "AutoConnect": False,
-        },
-    )
+    server_options = {"Role": "server", "RequireAuthentication": True, "RequireAuthorization": False, "AutoConnect": False}
+    profiles = [
+        (PROFILE_PATH, PROFILE_UUID, {"ServiceRecord": SDP_RECORD_XML}),
+        (CONTROL_PROFILE_PATH, CONTROL_PROFILE_UUID, {"PSM": dbus.UInt16(PSM_CONTROL), "Name": "bt_hid_kvm control"}),
+        (INTERRUPT_PROFILE_PATH, INTERRUPT_PROFILE_UUID, {"PSM": dbus.UInt16(PSM_INTERRUPT), "Name": "bt_hid_kvm interrupt"}),
+    ]
+    for path, uuid, options in profiles:
+        HidProfile(bus, path, on_connection)
+        manager.RegisterProfile(path, uuid, {**options, **server_options})
     return bus
 
 
-def get_device_path(mac: str) -> str:
-    return f"{ADAPTER_PATH}/dev_{mac.replace(':', '_')}"
+def get_adapter_path_from_objects(objects: dict) -> str | None:
+    """Pick the first Bluetooth adapter (hci0 before hci1) from BlueZ GetManagedObjects() output."""
+    paths = [str(path) for path, interfaces in objects.items() if "org.bluez.Adapter1" in interfaces]
+    # Shorter first, so hci2 sorts before hci10.
+    return min(paths, key=lambda path: (len(path), path), default=None)
 
 
-def get_is_paired(bus: dbus.SystemBus, mac: str) -> bool:
-    path = get_device_path(mac)
+def get_adapter_path(bus: dbus.SystemBus) -> str:
+    manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+    adapter_path = get_adapter_path_from_objects(manager.GetManagedObjects())
+    if adapter_path is None:
+        raise SystemExit("no Bluetooth adapter found")
+    return adapter_path
+
+
+def get_device_path(adapter_path: str, mac: str) -> str:
+    return f"{adapter_path}/dev_{mac.replace(':', '_')}"
+
+
+def get_is_paired(bus: dbus.SystemBus, adapter_path: str, mac: str) -> bool:
+    path = get_device_path(adapter_path, mac)
     try:
         properties = dbus.Interface(bus.get_object("org.bluez", path), "org.freedesktop.DBus.Properties")
         return bool(properties.Get("org.bluez.Device1", "Paired"))
@@ -88,14 +106,26 @@ def connect_l2cap(mac: str, psm: int) -> socket.socket:
     return sock
 
 
-class HidLink:
-    """Device-initiated Bluetooth HID connection (control PSM 17 + interrupt PSM 19)."""
+def close_channel(sock: socket.socket) -> None:
+    # bluetoothd keeps its own copy of host-opened sockets, so close() alone leaves the channel up.
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    sock.close()
 
-    def __init__(self, on_disconnect: Callable[[str], None]):
+
+class HidLink:
+    """Bluetooth HID connection (control PSM 17 + interrupt PSM 19), opened by either side."""
+
+    def __init__(self, on_disconnect: Callable[[str], None], on_accept: Callable[[str], None]):
         self._on_disconnect = on_disconnect
+        self._on_accept = on_accept
         self._reports: queue.Queue[bytes | None] = queue.Queue(maxsize=256)
         self._sockets: tuple[socket.socket, socket.socket] | None = None
         self._lock = threading.Lock()
+        # Host-opened control channel waiting for its interrupt channel; GLib thread only.
+        self._pending_control: tuple[str, socket.socket] | None = None
         self.is_connected = False
 
     def connect(self, mac: str) -> None:
@@ -105,17 +135,49 @@ class HidLink:
         except OSError:
             control.close()
             raise
+        # If the host connected first, its link stays and these channels are dropped.
+        self._start((control, interrupt))
+
+    def accept(self, sock: socket.socket) -> None:
+        """Take a channel the host opened (Windows does); called on the GLib thread."""
+        # Python 3.14 reports L2CAP peers as (bdaddr, psm, cid).
+        mac, psm = sock.getpeername()[:2]
+        pending, self._pending_control = self._pending_control, None
+        if psm == PSM_CONTROL:
+            # A newer control channel replaces one whose interrupt never came.
+            if pending is not None:
+                close_channel(pending[1])
+            self._pending_control = (mac, sock)
+            return
+        # Hosts open control first, then interrupt.
+        if pending is None or pending[0] != mac:
+            close_channel(sock)
+            if pending is not None:
+                close_channel(pending[1])
+            return
+        if self._start((pending[1], sock)):
+            self._on_accept(mac)
+
+    def _start(self, sockets: tuple[socket.socket, socket.socket]) -> bool:
+        """Run the link on these channels; drops them and returns False if a link is already up."""
+        control, interrupt = sockets
         control.settimeout(None)
         interrupt.settimeout(SEND_TIMEOUT)
         interrupt.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, INTERRUPT_SNDBUF)
-        sockets = (control, interrupt)
         reports: queue.Queue[bytes | None] = queue.Queue(maxsize=256)
         with self._lock:
-            self._sockets = sockets
-            self._reports = reports
-            self.is_connected = True
+            is_started = not self.is_connected
+            if is_started:
+                self._sockets = sockets
+                self._reports = reports
+                self.is_connected = True
+        if not is_started:
+            for sock in sockets:
+                close_channel(sock)
+            return False
         for target in (self._read_control, self._read_interrupt, self._send_reports):
             threading.Thread(target=target, args=(sockets, reports), daemon=True).start()
+        return True
 
     @property
     def has_queued_reports(self) -> bool:
@@ -142,11 +204,7 @@ class HidLink:
             self.is_connected = False
             reports = self._reports
         for sock in sockets:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            sock.close()
+            close_channel(sock)
         reports.put(None)
         self._on_disconnect(reason)
 

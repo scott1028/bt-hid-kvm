@@ -20,13 +20,13 @@ def test_host_list_keeps_only_computers():
             get_device("53:E4:00:04:33:96", "53-E4-00-04-33-96", None, False),  # LE only, no class
         ]
     )
-    assert get_hosts_from_objects(objects) == [Host("98:BD:80:A5:22:41", "scott-288V", True)]
+    assert get_hosts_from_objects(objects, "/org/bluez/hci0") == [Host("98:BD:80:A5:22:41", "scott-288V", True)]
 
 
 def test_host_list_skips_other_adapters():
-    # Pairing and connecting only use hci0.
+    # Only the adapter the app uses counts.
     objects = dict([get_device("11:22:33:44:55:66", "other-pc", 0x5A010C, True, adapter="/org/bluez/hci1")])
-    assert get_hosts_from_objects(objects) == []
+    assert get_hosts_from_objects(objects, "/org/bluez/hci0") == []
 
 
 def test_host_list_puts_paired_hosts_first_then_sorts_by_name():
@@ -37,7 +37,7 @@ def test_host_list_puts_paired_hosts_first_then_sorts_by_name():
             get_device("33:33:33:33:33:33", "a-pc", 0x5A010C, False),
         ]
     )
-    assert [host.name for host in get_hosts_from_objects(objects)] == ["z-pc", "a-pc", "b-pc"]
+    assert [host.name for host in get_hosts_from_objects(objects, "/org/bluez/hci0")] == ["z-pc", "a-pc", "b-pc"]
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,6 @@ import dbus.service
 from gi.repository import GLib
 
 from bt_hid_kvm.constants import (
-    ADAPTER_PATH,
     AGENT_PATH,
     COMPUTER_MAJOR_CLASS,
     CONNECT_TIMEOUT,
@@ -72,10 +71,10 @@ def register_pairing_agent(
     manager.RegisterAgent(AGENT_PATH, "DisplayYesNo")
 
 
-def pair_device(bus: dbus.SystemBus, mac: str) -> None:
+def pair_device(bus: dbus.SystemBus, adapter_path: str, mac: str) -> None:
     """Pair with a known address without discovery; blocks until pairing ends."""
-    path = get_device_path(mac)
-    adapter = dbus.Interface(bus.get_object("org.bluez", ADAPTER_PATH), "org.bluez.Adapter1")
+    path = get_device_path(adapter_path, mac)
+    adapter = dbus.Interface(bus.get_object("org.bluez", adapter_path), "org.bluez.Adapter1")
     try:
         # Pair() fails with AlreadyExists on a bonded device, so drop the old bond first.
         adapter.RemoveDevice(path)
@@ -120,12 +119,12 @@ class Host(NamedTuple):
     is_paired: bool
 
 
-def get_hosts_from_objects(objects: dict) -> list[Host]:
-    """Pick computers on our adapter from BlueZ GetManagedObjects() output; paired ones first."""
+def get_hosts_from_objects(objects: dict, adapter_path: str) -> list[Host]:
+    """Pick computers on the given adapter from BlueZ GetManagedObjects() output; paired ones first."""
     hosts = []
     for interfaces in objects.values():
         properties = interfaces.get("org.bluez.Device1")
-        if properties is None or properties["Adapter"] != ADAPTER_PATH:
+        if properties is None or properties["Adapter"] != adapter_path:
             continue
         # Bits 12-8 of the Class of Device are the major class.
         if (properties.get("Class", 0) >> 8) & 0x1F != COMPUTER_MAJOR_CLASS:
@@ -134,21 +133,21 @@ def get_hosts_from_objects(objects: dict) -> list[Host]:
     return sorted(hosts, key=lambda host: (not host.is_paired, host.name))
 
 
-def get_known_hosts(bus: dbus.SystemBus) -> list[Host]:
+def get_known_hosts(bus: dbus.SystemBus, adapter_path: str) -> list[Host]:
     manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
-    return get_hosts_from_objects(manager.GetManagedObjects())
+    return get_hosts_from_objects(manager.GetManagedObjects(), adapter_path)
 
 
-def start_host_scan(bus: dbus.SystemBus) -> None:
+def start_host_scan(bus: dbus.SystemBus, adapter_path: str) -> None:
     """Scan until stop_host_scan(); found hosts show up in get_known_hosts()."""
-    adapter = dbus.Interface(bus.get_object("org.bluez", ADAPTER_PATH), "org.bluez.Adapter1")
+    adapter = dbus.Interface(bus.get_object("org.bluez", adapter_path), "org.bluez.Adapter1")
     # Classic only: hosts pair over BR/EDR, and skipping LE keeps the scan from sharing time with it.
     adapter.SetDiscoveryFilter({"Transport": "bredr"})
     adapter.StartDiscovery()
 
 
-def stop_host_scan(bus: dbus.SystemBus) -> None:
-    adapter = dbus.Interface(bus.get_object("org.bluez", ADAPTER_PATH), "org.bluez.Adapter1")
+def stop_host_scan(bus: dbus.SystemBus, adapter_path: str) -> None:
+    adapter = dbus.Interface(bus.get_object("org.bluez", adapter_path), "org.bluez.Adapter1")
     adapter.StopDiscovery()
 
 

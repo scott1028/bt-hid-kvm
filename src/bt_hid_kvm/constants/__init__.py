@@ -1,17 +1,22 @@
 from evdev import ecodes
 
-TARGET_MAC = "98:BD:80:A5:22:41"
-
 # Hold this key to send keyboard and mouse to the host.
 TRIGGER_KEY = ecodes.KEY_LEFTMETA
 UINPUT_KEYBOARD_NAME = "bt_hid_kvm keyboard"
 
+# UUIDs and paths below name this app to BlueZ, not any hardware: same on every machine and
+# every version, so BlueZ refuses a second running instance.
 # BlueZ rejects external profiles on the HID UUID (owned by its input plugin),
 # so register under a private UUID; the SDP record itself still declares HID 0x1124.
 PROFILE_UUID = "9d2b6c0e-6a8f-4f1e-9b7a-3c5d2e1f0a11"
 PROFILE_PATH = "/org/bluez/bt_hid_kvm"
+# Windows opens the HID channels itself, so bluetoothd also listens on them for this app.
+# Listening fails while bluetoothd's input plugin holds PSM 17/19; separate profiles keep the HID record alive then.
+CONTROL_PROFILE_UUID = "f3874a2d-2a3d-42ba-8c8d-95c73fa6a56c"
+CONTROL_PROFILE_PATH = "/org/bluez/bt_hid_kvm/control"
+INTERRUPT_PROFILE_UUID = "3d416b4f-f503-4fee-a13a-a3aafae6b3b5"
+INTERRUPT_PROFILE_PATH = "/org/bluez/bt_hid_kvm/interrupt"
 AGENT_PATH = "/org/bluez/bt_hid_kvm/agent"
-ADAPTER_PATH = "/org/bluez/hci0"
 
 # Paged only to make BlueZ create the device object before Pair()
 PSM_SDP = 0x01

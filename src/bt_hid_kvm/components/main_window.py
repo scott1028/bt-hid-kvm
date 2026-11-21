@@ -14,7 +14,7 @@ from bt_hid_kvm.constants import (
     SCAN_REFRESH_MS,
     UI_POLL_INTERVAL_MS,
 )
-from bt_hid_kvm.utils.bt_hid_link import HidLink
+from bt_hid_kvm.utils.bt_hid_link import HidLink, get_adapter_path, register_hid_profile
 from bt_hid_kvm.utils.bt_pairing import (
     get_known_hosts,
     get_mac_from_text,
@@ -29,18 +29,22 @@ from bt_hid_kvm.utils.input_capture import InputCapture
 class MainWindow:
     """Tk window; worker threads talk to it only through a queue."""
 
-    def __init__(self, root: tk.Tk, mac: str, bus: dbus.SystemBus):
+    def __init__(self, root: tk.Tk, mac: str | None):
         self._root = root
-        self._bus = bus
         self._events: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._link = HidLink(on_disconnect=lambda reason: self._events.put(("disconnected", reason)))
+        self._link = HidLink(
+            on_disconnect=lambda reason: self._events.put(("disconnected", reason)),
+            on_accept=lambda host: self._events.put(("connected", host)),
+        )
+        self._bus = register_hid_profile(self._link.accept)
+        self._adapter_path = get_adapter_path(self._bus)
         self._capture = InputCapture(
             self._link,
             on_mode_change=lambda is_remote: self._events.put(("mode", is_remote)),
             on_log=lambda message: self._events.put(("log", message)),
         )
         register_pairing_agent(
-            bus,
+            self._bus,
             on_request_confirmation=lambda passkey, answer: self._events.put(("passkey", (passkey, answer))),
             on_cancel=lambda: self._events.put(("passkey_cancel", None)),
         )
@@ -50,6 +54,8 @@ class MainWindow:
         self._scan_deadline = 0.0
         self._scan_job: str | None = None
         self._answer_passkey: Callable[[bool], None] | None = None
+        self._host_names: dict[str, str] = {}
+        self._remote_name = ""
 
         root.title("BT HID KVM")
         root.minsize(420, 0)
@@ -58,7 +64,7 @@ class MainWindow:
 
         ttk.Label(frame, text="目標").grid(row=0, column=0, sticky="w")
         # Pick a known or scanned host, or type a MAC.
-        self._target = tk.StringVar(value=mac)
+        self._target = tk.StringVar(value=mac or "")
         self._target_box = ttk.Combobox(frame, textvariable=self._target, width=34)
         self._target_box.grid(row=0, column=1, sticky="we", padx=8)
         buttons = ttk.Frame(frame)
@@ -162,7 +168,7 @@ class MainWindow:
 
     def _pair(self, mac: str) -> None:
         try:
-            pair_device(self._bus, mac)
+            pair_device(self._bus, self._adapter_path, mac)
             self._events.put(("paired", mac))
         except (OSError, dbus.DBusException) as error:
             self._events.put(("pair_failed", error))
@@ -177,20 +183,20 @@ class MainWindow:
         is_toggle_mode = self._is_toggle_mode.get()
         self._capture.is_toggle_mode = is_toggle_mode
         if is_toggle_mode:
-            self._hint.configure(text="連線後按一下左 Win（Keychron Mac 模式為 Command 位置）切到 288V，再按一下切回本機")
+            self._hint.configure(text="連線後按一下左 Win（Keychron Mac 模式為 Command 位置）切到對方電腦，再按一下切回本機")
         else:
-            self._hint.configure(text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V")
+            self._hint.configure(text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制對方電腦")
 
     def _handle_scan_click(self) -> None:
         try:
-            start_host_scan(self._bus)
+            start_host_scan(self._bus, self._adapter_path)
         except dbus.DBusException as error:
             self._append_log(f"scan failed: {error}")
             return
         self._is_scanning = True
         self._scan_deadline = time.monotonic() + SCAN_DURATION
         self._scan_button.configure(state="disabled")
-        self._status.configure(text="狀態：掃描中…（288V 要開啟可被搜尋）")
+        self._status.configure(text="狀態：掃描中…（對方電腦要開啟可被搜尋）")
         self._scan_job = self._root.after(SCAN_REFRESH_MS, self._refresh_scan)
 
     def _refresh_scan(self) -> None:
@@ -208,21 +214,24 @@ class MainWindow:
         self._is_scanning = False
         self._root.after_cancel(self._scan_job)
         try:
-            stop_host_scan(self._bus)
+            stop_host_scan(self._bus, self._adapter_path)
         except dbus.DBusException as error:
             self._append_log(f"stop scan failed: {error}")
         self._refresh_hosts()
 
     def _refresh_hosts(self) -> None:
         try:
-            hosts = get_known_hosts(self._bus)
+            hosts = get_known_hosts(self._bus, self._adapter_path)
         except dbus.DBusException as error:
             # Keep the event loop alive if bluetoothd restarts.
             self._append_log(f"list hosts failed: {error}")
             return
-        self._target_box.configure(
-            values=[f"{host.name} ({host.mac})" + (" 已配對" if host.is_paired else "") for host in hosts]
-        )
+        labels = [f"{host.name} ({host.mac})" + (" 已配對" if host.is_paired else "") for host in hosts]
+        self._target_box.configure(values=labels)
+        self._host_names = {host.mac: host.name for host in hosts}
+        # Hosts are sorted paired first; start on one that can connect right away.
+        if not self._target.get() and hosts and hosts[0].is_paired:
+            self._target.set(labels[0])
 
     def _poll_events(self) -> None:
         while not self._events.empty():
@@ -232,11 +241,16 @@ class MainWindow:
             elif kind == "mode":
                 is_remote = bool(payload)
                 self._mode.configure(
-                    text="288V" if is_remote else "本機",
+                    text=self._remote_name if is_remote else "本機",
                     bg=MODE_COLOR_REMOTE if is_remote else MODE_COLOR_LOCAL,
                 )
             elif kind == "connected":
                 self._is_connecting = False
+                self._remote_name = self._host_names.get(str(payload), str(payload))
+                # The host may connect on its own, without a 連線 click.
+                self._stop_scan()
+                self._pair_button.configure(state="disabled")
+                self._scan_button.configure(state="disabled")
                 self._connect_button.configure(state="normal", text="中斷")
                 self._status.configure(text=f"狀態：已連線 {payload}")
                 self._append_log(f"connected to {payload}")
@@ -255,7 +269,7 @@ class MainWindow:
                 self._append_log(f"disconnected: {payload}")
             elif kind == "passkey":
                 passkey, self._answer_passkey = payload
-                self._passkey_label.configure(text=f"配對碼 {passkey:06d}：288V 顯示的數字一樣嗎？")
+                self._passkey_label.configure(text=f"配對碼 {passkey:06d}：對方電腦顯示的數字一樣嗎？")
                 self._passkey.grid()
             elif kind == "passkey_cancel":
                 self._answer_passkey = None
