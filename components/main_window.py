@@ -88,24 +88,27 @@ class MainWindow:
             frame, text="本機", bg=MODE_COLOR_LOCAL, fg="white", font=("TkDefaultFont", 20, "bold"), pady=12
         )
         self._mode.grid(row=3, column=0, columnspan=3, sticky="we", pady=8)
+        # Boxed section, so the switch does not blend into the text around it.
+        trigger = ttk.LabelFrame(frame, text="觸發鍵", padding=(10, 6))
+        trigger.grid(row=4, column=0, columnspan=3, sticky="we", pady=(4, 4))
         self._is_toggle_mode = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            frame,
+            trigger,
             text="切換模式：按一下左 Win 切換，不用按住",
             variable=self._is_toggle_mode,
             command=self._handle_toggle_mode_change,
-        ).grid(row=4, column=0, columnspan=3, sticky="w")
-        self._hint = ttk.Label(frame)
-        self._hint.grid(row=5, column=0, columnspan=3, sticky="w")
+        ).pack(anchor="w")
+        self._hint = ttk.Label(trigger)
+        self._hint.pack(anchor="w", pady=(6, 0))
         self._handle_toggle_mode_change()
 
         self._devices = ttk.Label(frame, text="", justify="left")
-        self._devices.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._devices.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         self._log = tk.Text(frame, height=8, width=60, state="disabled")
-        self._log.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        self._log.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(7, weight=1)
+        frame.rowconfigure(6, weight=1)
 
         self._capture.start()
         keyboards = ", ".join(device.name.strip() for device in self._capture.keyboards) or "（無）"
