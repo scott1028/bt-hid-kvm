@@ -1,7 +1,9 @@
 import queue
+import re
 import socket
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import dbus
 import dbus.service
@@ -10,6 +12,7 @@ from gi.repository import GLib
 from bt_hid_kvm.constants import (
     ADAPTER_PATH,
     AGENT_PATH,
+    COMPUTER_MAJOR_CLASS,
     CONNECT_TIMEOUT,
     PAIR_TIMEOUT,
     PSM_SDP,
@@ -109,3 +112,47 @@ def pair_device(bus: dbus.SystemBus, mac: str) -> None:
     if error is not None:
         raise error
     properties.Set("org.bluez.Device1", "Trusted", dbus.Boolean(True, variant_level=1))
+
+
+class Host(NamedTuple):
+    mac: str
+    name: str
+    is_paired: bool
+
+
+def get_hosts_from_objects(objects: dict) -> list[Host]:
+    """Pick computers on our adapter from BlueZ GetManagedObjects() output; paired ones first."""
+    hosts = []
+    for interfaces in objects.values():
+        properties = interfaces.get("org.bluez.Device1")
+        if properties is None or properties["Adapter"] != ADAPTER_PATH:
+            continue
+        # Bits 12-8 of the Class of Device are the major class.
+        if (properties.get("Class", 0) >> 8) & 0x1F != COMPUTER_MAJOR_CLASS:
+            continue
+        hosts.append(Host(str(properties["Address"]), str(properties["Alias"]), bool(properties["Paired"])))
+    return sorted(hosts, key=lambda host: (not host.is_paired, host.name))
+
+
+def get_known_hosts(bus: dbus.SystemBus) -> list[Host]:
+    manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+    return get_hosts_from_objects(manager.GetManagedObjects())
+
+
+def start_host_scan(bus: dbus.SystemBus) -> None:
+    """Scan until stop_host_scan(); found hosts show up in get_known_hosts()."""
+    adapter = dbus.Interface(bus.get_object("org.bluez", ADAPTER_PATH), "org.bluez.Adapter1")
+    # Classic only: hosts pair over BR/EDR, and skipping LE keeps the scan from sharing time with it.
+    adapter.SetDiscoveryFilter({"Transport": "bredr"})
+    adapter.StartDiscovery()
+
+
+def stop_host_scan(bus: dbus.SystemBus) -> None:
+    adapter = dbus.Interface(bus.get_object("org.bluez", ADAPTER_PATH), "org.bluez.Adapter1")
+    adapter.StopDiscovery()
+
+
+def get_mac_from_text(text: str) -> str | None:
+    """Return the Bluetooth address in a typed MAC or a host list label."""
+    match = re.search(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", text, re.IGNORECASE)
+    return match.group().upper() if match else None

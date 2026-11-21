@@ -18,11 +18,16 @@ PSM_SDP = 0x01
 PSM_CONTROL = 0x11
 PSM_INTERRUPT = 0x13
 
+# Class of Device major class; the host list shows only computers.
+COMPUTER_MAJOR_CLASS = 0x01
+
 # Seconds
 CONNECT_TIMEOUT = 10.0
 SEND_TIMEOUT = 1.0
 # Covers both users comparing passkeys; longer than BlueZ's own agent timeout
 PAIR_TIMEOUT = 120.0
+# About two Classic inquiry rounds
+SCAN_DURATION = 20.0
 # Kernel clamps this to its minimum (4608 bytes, about 4 reports), so stale motion cannot pile up.
 INTERRUPT_SNDBUF = 1
 # About 125 Hz, a typical Bluetooth mouse report rate
@@ -30,5 +35,6 @@ MOUSE_FLUSH_INTERVAL = 0.008
 IDLE_POLL_INTERVAL = 0.1
 
 UI_POLL_INTERVAL_MS = 50
+SCAN_REFRESH_MS = 1000
 MODE_COLOR_LOCAL = "#757575"
 MODE_COLOR_REMOTE = "#2e7d32"

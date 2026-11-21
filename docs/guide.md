@@ -63,11 +63,13 @@ agent KeyboardDisplay
 default-agent
 ```
 
-**2. 在 265K 上**，在 repo 根目錄啟動 App，確認「目標 MAC」是 288V 的位址，再按「配對」：
+**2. 在 265K 上**，在 repo 根目錄啟動 App，在「目標」選 288V，再按「配對」：
 
 ```bash
 PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm
 ```
+
+還沒配對過的 288V 不會在清單裡。「目標」預設的 `98:BD:80:A5:22:41` 就是 288V；要換別台，直接輸入它的 MAC，或讓它開啟可被搜尋後按「掃描」。
 
 **3. 核對配對碼**：App 視窗會出現「配對碼 123456：288V 顯示的數字一樣嗎？」，288V 也會顯示一組數字。
 
@@ -148,8 +150,8 @@ UUID: Human Interface Device... (00001124-0000-1000-8000-00805f9b34fb)
 
 ```text
 BT HID KVM
-├─ 目標 MAC [98:BD:80:A5:22:41]  [配對]  [連線] 或 [中斷]
-├─ 狀態：未連線 / 配對中… / 已配對 <MAC>，可以連線 / 配對失敗 / 連線中… / 已連線 <MAC> / 連線失敗
+├─ 目標 [98:BD:80:A5:22:41 v]  [掃描]  [配對]  [連線] 或 [中斷]
+├─ 狀態：未連線 / 配對中… / 已配對 <MAC>，可以連線 / 配對失敗 / 連線中… / 已連線 <MAC> / 連線失敗 / 掃描中…（288V 要開啟可被搜尋） / 掃描結束，清單裡有 N 台電腦 / 目標裡找不到 MAC
 ├─ 配對碼：只在核對配對碼時出現，旁邊有 [不同] [相同]
 ├─ 模式色塊：灰色「本機」或綠色「288V」
 ├─ 提示：連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V
@@ -158,7 +160,9 @@ BT HID KVM
 └─ log 區
 ```
 
-配對和連線都在背景 thread 進行，進行中「配對」和「連線」都會先停用；已連線時「配對」也會停用。關閉視窗後，所有鍵盤滑鼠都會還給系統。
+「目標」是下拉選單，也可以直接輸入 MAC。清單列出 BlueZ 已知、在 `hci0` 上的電腦，已配對的排前面，例如 `scott-288V (98:BD:80:A5:22:41) 已配對`。按「掃描」會只掃 Classic 藍牙 20 秒，每秒更新清單，這段時間對方要開啟可被搜尋。
+
+配對和連線都在背景 thread 進行，進行中「掃描」「配對」「連線」都會先停用；已連線時「掃描」和「配對」也會停用。掃描中按「配對」或「連線」，會先停止掃描。關閉視窗後，所有鍵盤滑鼠都會還給系統。
 
 ## 切換模式時發生什麼事
 
@@ -215,13 +219,16 @@ Time
 | `ADAPTER_PATH` | `/org/bluez/hci0` | `--selftest` 檢查配對狀態、GUI「配對」用的藍牙介面 |
 | `PSM_SDP` | `0x01` | 配對前直連 288V 用的通道，只是為了讓 BlueZ 建立裝置資料 |
 | `PSM_CONTROL` / `PSM_INTERRUPT` | `0x11` / `0x13` | HID 的 control 和 interrupt 通道 |
+| `COMPUTER_MAJOR_CLASS` | `0x01` | Class of Device 的 major class「電腦」；「目標」清單只列這類裝置 |
 | `CONNECT_TIMEOUT` | `10.0` 秒 | 每條 L2CAP 連線的逾時；配對前的直連、等 BlueZ 建立裝置資料也用這個值 |
 | `SEND_TIMEOUT` | `1.0` 秒 | 送出報告的逾時，超過就判定斷線 |
 | `PAIR_TIMEOUT` | `120.0` 秒 | 等配對完成的上限，要留時間讓兩邊核對配對碼 |
+| `SCAN_DURATION` | `20.0` 秒 | 按一次「掃描」掃多久，約兩輪 Classic 掃描 |
 | `INTERRUPT_SNDBUF` | `1` | interrupt 通道的 `SO_SNDBUF`。kernel 會調到最小值（實測 4608 bytes，約 4 筆報告），舊的滑鼠位移就不會在 kernel 裡排隊 |
 | `MOUSE_FLUSH_INTERVAL` | `0.008` 秒 | 滑鼠報告的最短間隔，約 125 Hz |
 | `IDLE_POLL_INTERVAL` | `0.1` 秒 | 沒有滑鼠移動待送時，輸入迴圈的檢查間隔 |
 | `UI_POLL_INTERVAL_MS` | `50` | GUI 讀取事件佇列的間隔（毫秒） |
+| `SCAN_REFRESH_MS` | `1000` | 掃描中更新「目標」清單的間隔（毫秒） |
 | `MODE_COLOR_LOCAL` / `MODE_COLOR_REMOTE` | `#757575` / `#2e7d32` | 模式色塊的灰色和綠色 |
 
 ## 運作方式
@@ -294,7 +301,7 @@ App ──設 Trusted──► BlueZ
 log 出現 `pair failed: [Errno 112] Host is down`，代表 265K 用 MAC 連不到 288V，大約 5 秒後就放棄了。依序檢查：
 
 - 288V 有開機，藍牙也開著
-- 「目標 MAC」是 288V 的位址，可以在 288V 上用 `bluetoothctl show` 查
+- 「目標」是 288V 的位址，可以在 288V 上用 `bluetoothctl show` 查
 - 兩台不要離太遠
 
 ### 已連線但 288V 沒有反應
@@ -340,10 +347,10 @@ bt_hid_kvm/                        repo 根目錄
 ├── constants/hid.py               report descriptor、SDP 記錄、keycode 對照表
 ├── constants/__tests__/           keycode 對照表的測試
 ├── utils/bt_hid_link.py           RegisterProfile 與 L2CAP 連線
-├── utils/bt_pairing.py            配對：用 MAC 直連、Agent1 問配對碼
+├── utils/bt_pairing.py            配對：用 MAC 直連、Agent1 問配對碼、host 清單與掃描
 ├── utils/hid_report.py            HID 報告編碼、滑鼠位移合併
 ├── utils/input_capture.py         evdev 獨占、uinput 轉送、模式切換
-└── utils/__tests__/               HID 報告、control 回覆、配對 agent 的測試
+└── utils/__tests__/               HID 報告、control 回覆、配對 agent、host 清單的測試
 ```
 
 在 repo 根目錄執行檢查：
