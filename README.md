@@ -18,8 +18,7 @@
 - 執行 App 的電腦（265K）
   - Linux + BlueZ，支援 Classic 藍牙（BR/EDR）
   - 實測環境：Ubuntu 26.04、KDE Plasma 6.6.6（Wayland）、BlueZ 5.85
-  - 系統 Python `/usr/bin/python3`（實測 3.14），而且要支援 `socket.AF_BLUETOOTH`
-  - 套件：`python3-evdev`、`python3-dbus`、`python3-gi`、`python3-tk`
+  - [uv](https://docs.astral.sh/uv/)（實測 0.12.18）和系統 Python `/usr/bin/python3.14`，下方的系統套件也要裝好
   - 你的帳號在 `input` 群組，`/dev/uinput` 也屬於 `input` 群組（見[權限設定](docs/guide.md#權限設定)）
 - 被控制的電腦（288V）
   - 支援 Classic 藍牙 HID 的系統。目前只實測過 Linux + BlueZ
@@ -27,12 +26,23 @@
 ## 安裝與啟動
 
 ```bash
-sudo apt install python3-evdev python3-dbus python3-gi python3-tk
+sudo apt install build-essential pkgconf python3-dev python3-tk libdbus-1-dev libglib2.0-dev libgirepository-2.0-dev libcairo2-dev libffi-dev gir1.2-glib-2.0
 sudo usermod -aG input "$USER"   # 重新登入後生效
-PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm   # 在 repo 根目錄執行
+uv sync && uv run bt-hid-kvm     # 在 repo 根目錄執行
 ```
 
-程式是以 `bt_hid_kvm` 套件執行的，所以 repo 資料夾名稱要是 `bt_hid_kvm`。`PYTHONPATH=..` 讓 Python 從上一層目錄找到這個套件。
+`evdev`、`dbus-python`、`PyGObject` 在 PyPI 沒有 Linux 的預編譯版本，`uv sync` 會在 `.venv` 裡從原始碼編譯，所以要先裝這些系統套件：
+
+| 系統套件 | 用途 |
+|---|---|
+| `build-essential`、`pkgconf`、`python3-dev` | 編譯 Python 套件的工具和 Python 標頭檔 |
+| `libdbus-1-dev`、`libglib2.0-dev` | 編譯 `dbus-python` |
+| `libgirepository-2.0-dev`、`libffi-dev` | 編譯 `PyGObject` |
+| `libcairo2-dev` | 編譯 `pycairo`（`PyGObject` 需要它） |
+| `python3-tk` | 視窗用的 tkinter，PyPI 裝不到 |
+| `gir1.2-glib-2.0` | 執行時 `from gi.repository import GLib` 要讀的 typelib |
+
+`.python-version` 把專案鎖在系統的 `/usr/bin/python3.14`，因為 uv 自己下載的 Python 沒有藍牙 socket（`socket.AF_BLUETOOTH`）。
 
 **一定要透過這個 App 配對，才能正常使用。** 用系統的藍牙設定配對的話，288V 只會把 265K 當成一般電腦，不會出現鍵盤滑鼠。
 
@@ -45,7 +55,7 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm   # 在 repo 根目錄執行
 配對好之後，在 repo 根目錄執行：
 
 ```bash
-PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest
+uv run bt-hid-kvm --selftest
 ```
 
 288V 的游標會畫一個約 200px 的正方形（右 → 下 → 左 → 上），再按一下 Shift，然後程式自己結束。
@@ -71,7 +81,7 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest
 
 三件事一定要記得：
 
-- 一定要用 `/usr/bin/python3`。asdf、pyenv 這類自行編譯的 Python 可能沒有藍牙 socket
+- 一定要用 `uv run bt-hid-kvm` 啟動。直接用 asdf、pyenv 的 Python 執行，可能沒有藍牙 socket
 - 288V 重開機或藍牙斷線後，要在 App 再按一次「連線」
 - App 開著時才插上的鍵盤滑鼠，要重開 App 才會被攔截
 

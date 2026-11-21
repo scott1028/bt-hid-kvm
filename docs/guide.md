@@ -14,6 +14,7 @@
 | evdev | Linux kernel 的輸入事件介面，也就是 `/dev/input/event*` |
 | 獨占（grab） | `EVIOCGRAB`：只讓 App 收到某個裝置的事件，桌面收不到 |
 | uinput | 讓程式建立虛擬輸入裝置的 kernel 介面，也就是 `/dev/uinput` |
+| uv | Python 的專案管理工具。`uv sync` 依 `pyproject.toml` 和 `uv.lock` 建好 `.venv`，`uv run` 用這個環境執行指令 |
 | agent | BlueZ 配對時負責問使用者的程式，例如跳出配對碼請你確認。App 有自己的 agent |
 | 可被搜尋 / 可連線 | 可被搜尋（discoverable）：別人掃描時看得到你。可連線（connectable）：別人知道你的 MAC 就能直接連。藍牙開著時通常一直可連線 |
 
@@ -68,7 +69,7 @@ default-agent
 **2. 在 265K 上**，在 repo 根目錄啟動 App，在「目標」選 288V，再按「配對」：
 
 ```bash
-PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm
+uv run bt-hid-kvm
 ```
 
 還沒配對過的 288V 不會在清單裡。「目標」預設的 `98:BD:80:A5:22:41` 就是 288V；要換別台，直接輸入它的 MAC，或讓它開啟可被搜尋後按「掃描」。
@@ -120,7 +121,7 @@ default-agent
 
 ```bash
 bluetoothctl remove 98:BD:80:A5:22:41
-PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest --mac 98:BD:80:A5:22:41 &
+uv run bt-hid-kvm --selftest --mac 98:BD:80:A5:22:41 &
 bluetoothctl
 ```
 
@@ -148,7 +149,7 @@ UUID: Human Interface Device... (00001124-0000-1000-8000-00805f9b34fb)
 
 ## 視窗畫面
 
-在 repo 根目錄執行 `PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm` 後，會出現標題為「BT HID KVM」的視窗：
+在 repo 根目錄執行 `uv run bt-hid-kvm` 後，會出現標題為「BT HID KVM」的視窗：
 
 ```text
 BT HID KVM
@@ -214,7 +215,7 @@ Time
 
 ## 設定值
 
-設定值都在 `constants/__init__.py`，要改就直接改這個檔案。
+設定值都在 `src/bt_hid_kvm/constants/__init__.py`，要改就直接改這個檔案。
 
 | 常數 | 值 | 用途 |
 |---|---|---|
@@ -292,12 +293,16 @@ App ──設 Trusted──► BlueZ
 
 ### 啟動時找不到模組或沒有 AF_BLUETOOTH
 
-看到 `ModuleNotFoundError: No module named 'evdev'`，或沒有 `AF_BLUETOOTH` 的錯誤，代表你用的不是系統 Python。實測 asdf 的 Python 3.12 就沒有 `socket.AF_BLUETOOTH`。請改用 `/usr/bin/python3`。
+看到 `ModuleNotFoundError: No module named 'evdev'`，或沒有 `AF_BLUETOOTH` 的錯誤，代表程式不是用專案的 `.venv` 跑的。請在 repo 根目錄用 `uv run bt-hid-kvm` 啟動：`.python-version` 會讓 uv 用系統的 `/usr/bin/python3.14`。實測 asdf 的 Python 3.12 和 uv 自己下載的 Python 3.14.7 都沒有 `socket.AF_BLUETOOTH`。
+
+### uv sync 編譯失敗
+
+`evdev`、`dbus-python`、`PyGObject`、`pycairo` 都要在本機從原始碼編譯，少了任何一個系統套件就會失敗。照 README「安裝與啟動」的 `sudo apt install` 把套件裝齊，再執行一次 `uv sync`。
 
 ### 按觸發鍵沒反應
 
 - 先確認狀態是「已連線」。沒連線時，觸發鍵只是一般的 Win 鍵
-- 執行 `/usr/bin/python3 -m evdev.evtest`，選你的鍵盤，按一下那顆鍵，看它送出的是不是 `KEY_LEFTMETA`
+- 執行 `uv run python -m evdev.evtest`，選你的鍵盤，按一下那顆鍵，看它送出的是不是 `KEY_LEFTMETA`
 - 送出的是 `KEY_LEFTALT` 的話，代表鍵盤在 Mac 模式，改按左下角第 3 顆，或把鍵盤切到 Windows 模式
 
 ### 連線出現 Connection refused
@@ -326,7 +331,7 @@ hidp_add_connection() Rejected connection from !bonded device /org/bluez/hci0/de
 
 ### 本機鍵盤沒反應
 
-用滑鼠關掉 App 視窗；本機模式下滑鼠不會被獨占。也可以從別的終端機執行 `pkill -f "python3 -m bt_hid_kvm"`。程式一結束，kernel 就會把鍵盤滑鼠還給系統。
+用滑鼠關掉 App 視窗；本機模式下滑鼠不會被獨占。也可以從別的終端機執行 `pkill -f "bt_hid_kvm|bt-hid-kvm"`，原始碼版和 AppImage 都適用。程式一結束，kernel 就會把鍵盤滑鼠還給系統。
 
 ## 已知限制
 
@@ -345,42 +350,48 @@ hidp_add_connection() Rejected connection from !bonded device /org/bluez/hci0/de
 ## 開發與測試
 
 ```text
-bt_hid_kvm/                        repo 根目錄
-├── .gitignore                     忽略 __pycache__、測試與 lint 快取、build/、dist/
+bt_hid_kvm/                        repo 根目錄，資料夾名稱不限
+├── .gitignore                     忽略 __pycache__、測試與 lint 快取、.venv/、build/、dist/
+├── .python-version                把 uv 鎖在系統的 /usr/bin/python3.14
+├── pyproject.toml                 套件資訊、依賴、bt-hid-kvm 指令、pytest 設定
+├── uv.lock                        uv 鎖定的依賴版本
 ├── Makefile                       `make` 打包 AppImage
 ├── README.md                      最短上手路徑
 ├── docs/guide.md                  這份指南
 ├── packaging/appimage/            AppImage 的啟動腳本 AppRun、桌面檔、圖示
-├── __main__.py                    入口：GUI 或 --selftest
-├── components/main_window.py      Tk 視窗
-├── constants/__init__.py          MAC、觸發鍵、逾時等設定
-├── constants/hid.py               report descriptor、SDP 記錄、keycode 對照表
-├── constants/__tests__/           keycode 對照表的測試
-├── utils/bt_hid_link.py           RegisterProfile 與 L2CAP 連線
-├── utils/bt_pairing.py            配對：用 MAC 直連、Agent1 問配對碼、host 清單與掃描
-├── utils/hid_report.py            HID 報告編碼、滑鼠位移合併
-├── utils/input_capture.py         evdev 獨占、uinput 轉送、模式切換
-└── utils/__tests__/               HID 報告、control 回覆、配對 agent、host 清單、切換模式的測試
+└── src/bt_hid_kvm/
+    ├── __init__.py                套件標記，內容是空的
+    ├── __main__.py                入口：GUI 或 --selftest
+    ├── components/main_window.py  Tk 視窗
+    ├── constants/__init__.py      MAC、觸發鍵、逾時等設定
+    ├── constants/hid.py           report descriptor、SDP 記錄、keycode 對照表
+    ├── constants/__tests__/       keycode 對照表的測試
+    ├── utils/bt_hid_link.py       RegisterProfile 與 L2CAP 連線
+    ├── utils/bt_pairing.py        配對：用 MAC 直連、Agent1 問配對碼、host 清單與掃描
+    ├── utils/hid_report.py        HID 報告編碼、滑鼠位移合併
+    ├── utils/input_capture.py     evdev 獨占、uinput 轉送、模式切換
+    └── utils/__tests__/           HID 報告、control 回覆、配對 agent、host 清單、切換模式的測試
 ```
 
 在 repo 根目錄執行檢查：
 
 ```bash
-PYTHONPATH=.. /usr/bin/python3 -m pytest
-ruff check --config "lint.isort.known-first-party = ['bt_hid_kvm']" .
+uv run pytest
+uv run ruff check .
 ```
 
-從 repo 根目錄跑時，ruff 認不出 `bt_hid_kvm` 是專案自己的套件，import 排序檢查會誤報。`--config` 就是用來告訴它這件事。
+`pytest` 和 `ruff` 是 `pyproject.toml` 的開發依賴，`uv sync` 會一起裝好。pytest 只找 `src/` 底下的測試；ruff 看得出 `src/bt_hid_kvm` 是專案自己的套件，不用額外設定。
 
-測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `python3-dbus` 和 `python3-gi`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput。
+測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `dbus-python` 和 `PyGObject`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput。
 
 ## 打包成 AppImage
 
-AppImage 是單一執行檔：它把 Python、程式用到的套件和共用函式庫都包進去，換一台 Linux 不用再裝 `python3-evdev` 這些套件。在 repo 根目錄執行 `make` 就會打包：
+AppImage 是單一執行檔：它把 Python、程式用到的套件和共用函式庫都包進去，換一台 Linux 不用再裝 uv 和編譯用的系統套件。在 repo 根目錄執行 `make` 就會打包：
 
 ```text
-make ──下載並檢查 sha256──► build/tools/（appimagetool、runtime）
-     ──複製 Python 3.14、套件、共用函式庫──► build/AppDir/
+make ──uv sync --locked──► .venv/（編譯好的套件）
+     ──下載並檢查 sha256──► build/tools/（appimagetool、runtime）
+     ──複製 Python 3.14、.venv 的套件、共用函式庫──► build/AppDir/
      ──打包──► dist/BT_HID_KVM-x86_64.AppImage
 ```
 
@@ -391,5 +402,5 @@ make ──下載並檢查 sha256──► build/tools/（appimagetool、runtime
 幾個容易踩的坑：
 
 - 改了程式碼要重新執行 `make`，AppImage 才會更新
-- 打包用的是系統的 `/usr/bin/python3.14`，所以打包的機器要先裝好 README 裡的套件，另外還要 `sudo apt install python3-cairo`（`gi` 載入時會用到）
+- 打包前會先執行 `uv sync --locked`，所以打包的機器要先裝好 uv 和 README 裡的系統套件。改了 `pyproject.toml` 的依賴卻沒更新 `uv.lock` 時會直接失敗，先執行 `uv lock`
 - glibc 沒有包進去，執行的機器 glibc 版本要不低於打包的機器；權限設定和 BlueZ 也一樣要準備好

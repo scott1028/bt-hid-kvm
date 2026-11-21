@@ -1,5 +1,5 @@
 # Build a self-contained AppImage from the host's system Python.
-# Bundles Python, its stdlib, the packages the app imports, and their shared libs.
+# Bundles Python, its stdlib, the packages uv builds into .venv, and their shared libs.
 # glibc is not bundled, so the AppImage needs glibc >= the build host's.
 
 APP      := bt_hid_kvm
@@ -8,9 +8,8 @@ PY_VER   := 3.14
 TCL_VER  := 8.6
 PYTHON   := /usr/bin/python$(PY_VER)
 SYS_LIB  := /usr/lib/$(ARCH)-linux-gnu
-SYS_PKG  := /usr/lib/python3/dist-packages
+VENV_PKG := .venv/lib/python$(PY_VER)/site-packages
 
-APP_SOURCES := __main__.py components constants utils
 # gi imports cairo on load
 PY_PACKAGES := evdev dbus gi cairo _dbus_bindings.cpython-* _dbus_glib_bindings.cpython-*
 # Loaded by `from gi.repository import GLib`
@@ -41,14 +40,13 @@ download = mkdir -p $(@D) && curl -fsSLo $@.part $(1) && echo '$(2)  $@.part' | 
 
 appimage: $(APPIMAGETOOL) $(RUNTIME)
 	rm -rf $(APPDIR)
-	mkdir -p $(APPDIR)/usr/bin $(PKG_DIR)/$(APP) $(APPDIR)/usr/lib/girepository-1.0 $(APPDIR)/usr/share/tcltk dist
+	uv sync --locked
+	mkdir -p $(APPDIR)/usr/bin $(PKG_DIR) $(APPDIR)/usr/lib/girepository-1.0 $(APPDIR)/usr/share/tcltk dist
 	cp -a $(PYTHON) $(APPDIR)/usr/bin/python3
 	cp -a /usr/lib/python$(PY_VER) $(APPDIR)/usr/lib/
 	cd $(APPDIR)/usr/lib/python$(PY_VER) && rm -rf config-$(PY_VER)-* dist-packages sitecustomize.py
-	cd $(SYS_PKG) && cp -a $(PY_PACKAGES) $(CURDIR)/$(PKG_DIR)/
-	# App uses the GLib main loop; the Qt one pulls in Qt6 + ICU (~45MB)
-	rm -f $(PKG_DIR)/dbus/mainloop/pyqt6*.so
-	tar -cf - --exclude=__tests__ --exclude=__pycache__ $(APP_SOURCES) | tar -xf - -C $(PKG_DIR)/$(APP)
+	cd $(VENV_PKG) && cp -a $(PY_PACKAGES) $(CURDIR)/$(PKG_DIR)/
+	tar -C src -cf - --exclude=__tests__ --exclude=__pycache__ $(APP) | tar -xf - -C $(PKG_DIR)
 	cp -a $(foreach t,$(TYPELIBS),$(SYS_LIB)/girepository-1.0/$(t).typelib) $(APPDIR)/usr/lib/girepository-1.0/
 	cp -a /usr/share/tcltk/tcl$(TCL_VER) /usr/share/tcltk/tk$(TCL_VER) $(APPDIR)/usr/share/tcltk/
 	ldd $(APPDIR)/usr/bin/python3 $$(find $(APPDIR)/usr/lib -name '*.so' -type f) \
