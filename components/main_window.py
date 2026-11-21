@@ -88,17 +88,24 @@ class MainWindow:
             frame, text="本機", bg=MODE_COLOR_LOCAL, fg="white", font=("TkDefaultFont", 20, "bold"), pady=12
         )
         self._mode.grid(row=3, column=0, columnspan=3, sticky="we", pady=8)
-        ttk.Label(frame, text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V").grid(
-            row=4, column=0, columnspan=3, sticky="w"
-        )
+        self._is_toggle_mode = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame,
+            text="切換模式：按一下左 Win 切換，不用按住",
+            variable=self._is_toggle_mode,
+            command=self._handle_toggle_mode_change,
+        ).grid(row=4, column=0, columnspan=3, sticky="w")
+        self._hint = ttk.Label(frame)
+        self._hint.grid(row=5, column=0, columnspan=3, sticky="w")
+        self._handle_toggle_mode_change()
 
         self._devices = ttk.Label(frame, text="", justify="left")
-        self._devices.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._devices.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         self._log = tk.Text(frame, height=8, width=60, state="disabled")
-        self._log.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        self._log.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(6, weight=1)
+        frame.rowconfigure(7, weight=1)
 
         self._capture.start()
         keyboards = ", ".join(device.name.strip() for device in self._capture.keyboards) or "（無）"
@@ -162,6 +169,14 @@ class MainWindow:
             self._answer_passkey(is_accepted)
         self._answer_passkey = None
         self._passkey.grid_remove()
+
+    def _handle_toggle_mode_change(self) -> None:
+        is_toggle_mode = self._is_toggle_mode.get()
+        self._capture.is_toggle_mode = is_toggle_mode
+        if is_toggle_mode:
+            self._hint.configure(text="連線後按一下左 Win（Keychron Mac 模式為 Command 位置）切到 288V，再按一下切回本機")
+        else:
+            self._hint.configure(text="連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V")
 
     def _handle_scan_click(self) -> None:
         try:

@@ -60,6 +60,8 @@ class InputCapture:
         self.keyboards: list[InputDevice] = []
         self.mice: list[InputDevice] = []
         self.is_remote = False
+        # Set from the UI thread: True = tap the trigger to switch, False = hold it.
+        self.is_toggle_mode = False
         self._is_mouse_grabbed = False
         self._local_keys: set[int] = set()
         self._remote_keys: list[int] = []
@@ -136,9 +138,12 @@ class InputCapture:
         # A trigger pressed while disconnected stays a normal local key until released.
         is_trigger = event.code == TRIGGER_KEY and TRIGGER_KEY not in self._local_keys
         if is_trigger and (self._link.is_connected or self.is_remote):
-            if event.value == 1:
+            # Toggle mode: each press flips the mode. Hold mode: press enters, release leaves.
+            if event.value == 1 and self.is_toggle_mode and self.is_remote:
+                self._leave_remote()
+            elif event.value == 1:
                 self._enter_remote()
-            elif event.value == 0:
+            elif event.value == 0 and not self.is_toggle_mode:
                 self._leave_remote()
         elif self.is_remote:
             self._send_remote_key(event.code, event.value)

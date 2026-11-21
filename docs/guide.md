@@ -154,13 +154,16 @@ BT HID KVM
 ├─ 狀態：未連線 / 配對中… / 已配對 <MAC>，可以連線 / 配對失敗 / 連線中… / 已連線 <MAC> / 連線失敗 / 掃描中…（288V 要開啟可被搜尋） / 掃描結束，清單裡有 N 台電腦 / 目標裡找不到 MAC
 ├─ 配對碼：只在核對配對碼時出現，旁邊有 [不同] [相同]
 ├─ 模式色塊：灰色「本機」或綠色「288V」
-├─ 提示：連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V
+├─ 切換模式：勾選後按一下左 Win 切換，不用按住
+├─ 提示：連線後按住左 Win（Keychron Mac 模式為 Command 位置）控制 288V；勾選切換模式後改成「按一下切換」的說明
 ├─ 鍵盤：被攔截的鍵盤
 ├─ 滑鼠：被監看的滑鼠
 └─ log 區
 ```
 
 「目標」是下拉選單，也可以直接輸入 MAC。清單列出 BlueZ 已知、在 `hci0` 上的電腦，已配對的排前面，例如 `scott-288V (98:BD:80:A5:22:41) 已配對`。按「掃描」會只掃 Classic 藍牙 20 秒，每秒更新清單，這段時間對方要開啟可被搜尋。
+
+「切換模式」不會記住，每次開 App 都從按住模式開始。
 
 配對和連線都在背景 thread 進行，進行中「掃描」「配對」「連線」都會先停用；已連線時「掃描」和「配對」也會停用。掃描中按「配對」或「連線」，會先停止掃描。關閉視窗後，所有鍵盤滑鼠都會還給系統。
 
@@ -187,6 +190,8 @@ Time
  ├─ 送「全部放開」的鍵盤和滑鼠報告給 288V
  └─ 解除滑鼠獨占
 ```
+
+勾選「切換模式」時，進入和離開做的事一樣，只是改成「按一下觸發鍵」切換：這次按下進入 288V 模式，下一次按下才回到本機模式。放開觸發鍵、按住時的自動重複，都不會切換。
 
 幾種特殊情況：
 
@@ -350,7 +355,7 @@ bt_hid_kvm/                        repo 根目錄
 ├── utils/bt_pairing.py            配對：用 MAC 直連、Agent1 問配對碼、host 清單與掃描
 ├── utils/hid_report.py            HID 報告編碼、滑鼠位移合併
 ├── utils/input_capture.py         evdev 獨占、uinput 轉送、模式切換
-└── utils/__tests__/               HID 報告、control 回覆、配對 agent、host 清單的測試
+└── utils/__tests__/               HID 報告、control 回覆、配對 agent、host 清單、切換模式的測試
 ```
 
 在 repo 根目錄執行檢查：
@@ -362,4 +367,4 @@ ruff check --config "lint.isort.known-first-party = ['bt_hid_kvm']" .
 
 從 repo 根目錄跑時，ruff 認不出 `bt_hid_kvm` 是專案自己的套件，import 排序檢查會誤報。`--config` 就是用來告訴它這件事。
 
-測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式，配對 agent 的測試會用到 `python3-dbus` 和 `python3-gi`，但不會連上系統的 BlueZ。
+測試檔名都帶 `_tdd`，例如 `test_hid_report_tdd.py`。它們都不需要藍牙或實體裝置：大多只測純函式；配對 agent 的測試會用到 `python3-dbus` 和 `python3-gi`，但不會連上系統的 BlueZ；切換模式的測試用假的藍牙連線和 uinput。

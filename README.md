@@ -63,6 +63,8 @@ PYTHONPATH=.. /usr/bin/python3 -m bt_hid_kvm --selftest
 2. 按住觸發鍵：色塊變成綠色「288V」，鍵盤滑鼠都送到 288V
 3. 放開觸發鍵：色塊變回灰色「本機」
 
+不想一直按住的話，勾選「切換模式」：按一下觸發鍵切到 288V，再按一下切回本機。
+
 三件事一定要記得：
 
 - 一定要用 `/usr/bin/python3`。asdf、pyenv 這類自行編譯的 Python 可能沒有藍牙 socket
